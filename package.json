@@ -1,0 +1,33 @@
+{
+  "name": "neon-grid-td",
+  "version": "1.0.0",
+  "description": "Neon Grid TD — Android & iOS mobile-first PWA tower defense. Canvas 2D + Web Audio, zero runtime dependencies, Capacitor-ready.",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "serve": "python3 -m http.server 8002 --directory www --bind 0.0.0.0",
+    "check": "node --check www/js/config.js && node --check www/js/audio.js && node --check www/js/pathfinding.js && node --check www/js/entities.js && node --check www/js/waves.js && node --check www/js/renderer.js && node --check www/js/ui.js && node --check www/js/main.js",
+    "test": "node tools/smoke-test.mjs",
+    "verify": "npm run check && npm run test",
+    "cap:android": "npx cap add android",
+    "cap:ios": "npx cap add ios",
+    "cap:sync": "npx cap sync"
+  },
+  "keywords": [
+    "tower-defense",
+    "pwa",
+    "capacitor",
+    "canvas",
+    "web-audio",
+    "mobile-first",
+    "game"
+  ],
+  "author": "danielstirbu",
+  "license": "MIT",
+  "devDependencies": {
+    "playwright": "^1.65.1"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

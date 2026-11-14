@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <meta name="theme-color" content="#05060f" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="NeonGridTD" />
+  <meta name="description" content="Neon Grid TD — mobile-first cyberpunk tower defense. Plays 100% offline." />
+  <title>Neon Grid TD</title>
+  <link rel="manifest" href="manifest.json" />
+  <link rel="icon" type="image/svg+xml" href="icons/icon-192.svg" />
+  <link rel="apple-touch-icon" href="icons/icon-180.png" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="app">
+    <header id="hud">
+      <div class="stat" id="stat-wave" title="Wave">
+        <span class="stat-icon">◈</span><span id="hud-wave">0/20</span>
+      </div>
+      <div class="stat stat-currency" id="stat-cash" title="Credits">
+        <span class="stat-icon">¤</span><span id="hud-cash">0</span>
+      </div>
+      <div class="stat stat-core" id="stat-core" title="Core integrity">
+        <span class="stat-icon">♥</span><span id="hud-core">20</span>
+      </div>
+      <div class="hud-buttons">
+        <button id="btn-pause" class="icon-btn" aria-label="Pause" title="Pause">❚❚</button>
+        <button id="btn-speed" class="icon-btn" aria-label="Toggle speed" title="Speed">▶</button>
+        <button id="btn-sound" class="icon-btn" aria-label="Toggle sound" title="Sound">♪</button>
+      </div>
+    </header>
+
+    <main id="stage">
+      <canvas id="game"></canvas>
+      <div id="wave-banner" class="hidden"></div>
+    </main>
+
+    <footer id="dock" aria-label="Tower dock">
+      <div id="tower-dock"></div>
+      <button id="btn-next-wave" class="primary-btn">START WAVE ▸</button>
+    </footer>
+
+    <!-- Contextual tower menu (upgrade / focus target / sell) -->
+    <div id="tower-menu" class="overlay-panel hidden">
+      <div class="panel-title" id="tm-title">Pulse Turret</div>
+      <div class="panel-stats" id="tm-stats">Lv.1 · DMG 8 · RNG 2.6</div>
+      <div class="panel-row">
+        <button id="tm-upgrade" class="primary-btn half">UPGRADE <span id="tm-up-cost">¤40</span></button>
+        <button id="tm-sell" class="danger-btn half">SELL <span id="tm-sell-val">¤24</span></button>
+      </div>
+      <div class="panel-row">
+        <button id="tm-target" class="ghost-btn wide">TARGET: FIRST</button>
+      </div>
+      <div class="panel-row">
+        <button id="tm-close" class="ghost-btn wide">CLOSE</button>
+      </div>
+    </div>
+
+    <!-- Start / Game Over / Victory overlay -->
+    <div id="screen-start" class="overlay">
+      <div class="overlay-panel">
+        <h1 class="logo">NEON<span>GRID</span>TD</h1>
+        <p class="tagline">Hold the grid. Defend the core.</p>
+        <button id="btn-play" class="primary-btn big">▸ PLAY CAMPAIGN</button>
+        <button id="btn-endless" class="ghost-btn wide">∞ ENDLESS MODE</button>
+        <p class="hint">Tap a cell to place a turret. Enemies follow the shortest path — never fully block it.</p>
+      </div>
+    </div>
+
+    <div id="screen-over" class="overlay hidden">
+      <div class="overlay-panel">
+        <h2 id="over-title" class="logo small">GRID BREACHED</h2>
+        <p id="over-detail" class="tagline">The core fell on wave 1.</p>
+        <button id="btn-retry" class="primary-btn big">↺ RETRY</button>
+        <button id="btn-menu" class="ghost-btn wide">MAIN MENU</button>
+      </div>
+    </div>
+
+    <div id="toast" class="hidden"></div>
+  </div>
+
+  <script>
+    if ('serviceWorker' in navigator &&
+        (location.protocol === 'https:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1')) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('sw.js').catch(() => {});
+      });
+    }
+  </script>
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>

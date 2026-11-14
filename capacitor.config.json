@@ -1,0 +1,17 @@
+{
+  "appId": "ro.neongrid.td",
+  "appName": "Neon Grid TD",
+  "webDir": "www",
+  "bundledWebRuntime": false,
+  "server": {
+    "androidScheme": "https"
+  },
+  "android": {
+    "allowMixedContent": false,
+    "backgroundColor": "#05060f"
+  },
+  "ios": {
+    "contentInset": "always",
+    "backgroundColor": "#05060f"
+  }
+}
