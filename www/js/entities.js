@@ -32,6 +32,13 @@ export class Enemy {
     this.path = [];
     this.pathIdx = 0;
     this.travel = 0; // distance travelled, used by 'FIRST' targeting
+    // Animation state consumed by the toon renderer.
+    this.seed = Math.random() * 100;
+    this.hurt = 0;
+    this.blinkLeft = 0;
+    this.nextBlink = 1.6 + Math.random() * 3.4;
+    this.dirX = 0;
+    this.dirY = 1;
   }
 
   get phased() {
@@ -48,11 +55,19 @@ export class Enemy {
     if (this.dead) return;
     const dealt = Math.max(1, amount - this.armor);
     this.hp -= dealt;
+    this.hurt = 0.16;
     if (this.hp <= 0) this.dead = true;
     return dealt;
   }
 
   update(dt, now) {
+    if (this.hurt > 0) this.hurt -= dt;
+    this.nextBlink -= dt;
+    if (this.nextBlink <= 0) {
+      this.blinkLeft = 0.12;
+      this.nextBlink = 1.6 + Math.random() * 3.4;
+    }
+    if (this.blinkLeft > 0) this.blinkLeft -= dt;
     if (this.phaseEvery) {
       this.nextPhase -= dt;
       if (this.nextPhase <= 0) {
@@ -74,6 +89,10 @@ export class Enemy {
       const dy = wp.y - this.y;
       const d = Math.hypot(dx, dy);
       const step = this.speed * dt;
+      if (d > 1e-6) {
+        this.dirX = dx / d;
+        this.dirY = dy / d;
+      }
       if (d <= step) {
         this.x = wp.x;
         this.y = wp.y;

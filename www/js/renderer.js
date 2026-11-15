@@ -1,5 +1,7 @@
 // renderer.js — Canvas 2D at native DPR: grid, towers, enemies, projectiles, beams, VFX.
+// Characters are drawn with the toon.js cartoon helpers; projectiles/beams/particles stay neon.
 import { GRID, PALETTE } from './config.js';
+import { drawToonEnemy, drawToonTower, toonText } from './toon.js';
 
 export class Renderer {
   constructor(canvas) {
@@ -9,6 +11,7 @@ export class Renderer {
     this.cell = 24;
     this.ox = 0;
     this.oy = 0;
+    this.time = 0; // seconds since load, drives toon idle animations
     this.resize();
   }
 
@@ -37,6 +40,7 @@ export class Renderer {
 
   begin() {
     const { ctx } = this;
+    this.time = performance.now() / 1000;
     ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
     ctx.clearRect(0, 0, this.canvas.width / this.dpr, this.canvas.height / this.dpr);
   }
@@ -115,37 +119,9 @@ export class Renderer {
 
   drawTower(t) {
     const { ctx, cell } = this;
-    const cx = this.sx(t.col + 0.5);
-    const cy = this.sy(t.row + 0.5);
-    const r = cell * 0.36;
     ctx.save();
-    ctx.translate(cx, cy);
-
-    // base plate
-    ctx.strokeStyle = t.def.color;
-    ctx.fillStyle = 'rgba(5,6,15,0.9)';
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.arc(0, 0, r, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.stroke();
-
-    // level pips
-    ctx.fillStyle = t.def.color;
-    for (let i = 0; i < t.level; i++) {
-      ctx.fillRect(-r + 3 + i * (cell * 0.12), r + 2, cell * 0.08, 3);
-    }
-
-    // turret head
-    ctx.rotate(t.angle + Math.PI / 2);
-    const rec = t.recoil > 0 ? t.recoil * cell * 0.12 : 0;
-    ctx.font = `bold ${Math.round(cell * 0.5)}px monospace`;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.shadowColor = t.def.color;
-    ctx.shadowBlur = cell * 0.28;
-    ctx.fillStyle = t.def.color;
-    ctx.fillText(t.def.glyph, 0, rec);
+    ctx.translate(this.sx(t.col + 0.5), this.sy(t.row + 0.5));
+    drawToonTower(ctx, t, cell, this.time);
     ctx.restore();
   }
 
@@ -157,58 +133,11 @@ export class Renderer {
     ctx.save();
     ctx.translate(x, y);
     if (e.phased) ctx.globalAlpha = 0.32;
-    ctx.shadowColor = e.color;
-    ctx.shadowBlur = cell * 0.22;
-    ctx.fillStyle = e.color;
-    ctx.strokeStyle = 'rgba(255,255,255,0.75)';
-    ctx.lineWidth = 1;
-
-    ctx.beginPath();
-    switch (e.shape) {
-      case 'tri':
-        ctx.moveTo(0, -s); ctx.lineTo(s * 0.87, s * 0.5); ctx.lineTo(-s * 0.87, s * 0.5);
-        ctx.closePath();
-        break;
-      case 'square':
-        ctx.rect(-s * 0.8, -s * 0.8, s * 1.6, s * 1.6);
-        break;
-      case 'hex': {
-        for (let i = 0; i < 6; i++) {
-          const a = (Math.PI / 3) * i - Math.PI / 6;
-          const px = Math.cos(a) * s; const py = Math.sin(a) * s;
-          i === 0 ? ctx.moveTo(px, py) : ctx.lineTo(px, py);
-        }
-        ctx.closePath();
-        break;
-      }
-      case 'ghost': {
-        ctx.arc(0, -s * 0.15, s * 0.85, Math.PI, 0);
-        ctx.lineTo(s * 0.85, s * 0.7);
-        ctx.quadraticCurveTo(s * 0.42, s * 0.35, 0, s * 0.7);
-        ctx.quadraticCurveTo(-s * 0.42, s * 0.35, -s * 0.85, s * 0.7);
-        ctx.closePath();
-        break;
-      }
-      case 'boss': {
-        for (let i = 0; i < 8; i++) {
-          const a = (Math.PI / 4) * i;
-          const rr = i % 2 === 0 ? s : s * 0.55;
-          const px = Math.cos(a) * rr; const py = Math.sin(a) * rr;
-          i === 0 ? ctx.moveTo(px, py) : ctx.lineTo(px, py);
-        }
-        ctx.closePath();
-        break;
-      }
-      default: // diamond
-        ctx.moveTo(0, -s); ctx.lineTo(s * 0.75, 0); ctx.lineTo(0, s); ctx.lineTo(-s * 0.75, 0);
-        ctx.closePath();
-    }
-    ctx.fill();
-    if (e.armor > 0) ctx.stroke();
+    drawToonEnemy(ctx, e, s, this.time);
     if (e.slowFactor < 1) {
-      ctx.shadowBlur = 0;
-      ctx.strokeStyle = PALETTE.green;
       ctx.globalAlpha = 0.85;
+      ctx.strokeStyle = PALETTE.green;
+      ctx.lineWidth = Math.max(1.5, s * 0.12);
       ctx.beginPath();
       ctx.arc(0, 0, s * 1.35, 0, Math.PI * 2);
       ctx.stroke();
@@ -275,12 +204,7 @@ export class Renderer {
     const a = Math.max(0, ft.time / ft.maxTime);
     ctx.save();
     ctx.globalAlpha = a;
-    ctx.fillStyle = ft.color;
-    ctx.font = `bold ${Math.max(10, ft.size * cell)}px monospace`;
-    ctx.textAlign = 'center';
-    ctx.shadowColor = ft.color;
-    ctx.shadowBlur = 6;
-    ctx.fillText(ft.text, this.sx(ft.x), this.sy(ft.y));
+    toonText(ctx, ft.text, this.sx(ft.x), this.sy(ft.y), Math.max(10, ft.size * cell), ft.color);
     ctx.restore();
   }
 
