@@ -355,61 +355,274 @@ export function drawToonEnemy(ctx, e, s, time) {
   if (e.shape === 'square') shield(ctx, s, e, lighten(color, 0.2));
 }
 
-// Tower character: chunky base, domed head with eyes tracking the aim, glyph emblem.
+// Each tower has its own silhouette that telegraphs its role:
+// pulse = fast twin-barrel gatling, cryo = floating frost crystal, arc = tesla coil,
+// rail = long sniper cannon. All share shadow, bob, and level pips.
+function jit(n) {
+  return Math.abs((Math.sin(n * 127.1) * 43758.5453) % 1);
+}
+
+function emblem(ctx, t, s, y) {
+  ctx.font = `bold ${Math.round(s * 0.62)}px ${TOON_FONT}`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.lineJoin = 'round';
+  ctx.lineWidth = Math.max(1.4, s * 0.2);
+  ctx.strokeStyle = INK;
+  ctx.strokeText(t.def.glyph, 0, y);
+  ctx.fillStyle = '#ffffff';
+  ctx.fillText(t.def.glyph, 0, y);
+}
+
+function muzzleFlash(ctx, s, x, y, len) {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.beginPath();
+  for (let i = 0; i < 8; i++) {
+    const a = (Math.PI / 4) * i;
+    const r = i % 2 ? s * 0.16 : s * len;
+    const px = Math.cos(a) * r;
+    const py = Math.sin(a) * r;
+    i === 0 ? ctx.moveTo(px, py) : ctx.lineTo(px, py);
+  }
+  ctx.closePath();
+  ctx.fillStyle = 'rgba(255,255,255,0.9)';
+  ctx.fill();
+  ctx.restore();
+}
+
+function zigZap(ctx, x0, y0, x1, y1, s, seedT) {
+  ctx.save();
+  ctx.beginPath();
+  ctx.moveTo(x0, y0);
+  for (let i = 1; i < 4; i++) {
+    const f = i / 4;
+    ctx.lineTo(x0 + (x1 - x0) * f + (jit(seedT + i * 7.3) - 0.5) * s * 0.55,
+      y0 + (y1 - y0) * f + (jit(seedT + i * 3.7) - 0.5) * s * 0.4);
+  }
+  ctx.lineTo(x1, y1);
+  ctx.strokeStyle = '#ffffff';
+  ctx.lineWidth = Math.max(1, s * 0.1);
+  ctx.lineCap = 'round';
+  ctx.stroke();
+  ctx.restore();
+}
+
+function pulseArt(ctx, t, s, time, bob) {
+  const color = t.def.color;
+  const seed = t.col * 7.13 + t.row * 3.71;
+  const blink = ((time * 0.55 + seed) % 3.6) < 0.13;
+  const look = { x: Math.cos(t.angle), y: Math.sin(t.angle) };
+
+  // round base plate
+  ctx.beginPath();
+  ctx.arc(0, s * 0.38 + bob, s * 0.95, 0, Math.PI * 2);
+  paint(ctx, color, s * 1.15);
+  ink(ctx, s);
+  emblem(ctx, t, s, s * 0.58 + bob);
+
+  // twin gatling barrels that train on the aim and kick on fire
+  ctx.save();
+  ctx.translate(0, -s * 0.42 + bob);
+  ctx.rotate(t.angle + Math.PI / 2);
+  const rec = t.recoil * s * 0.22;
+  for (const off of [-s * 0.24, s * 0.24]) {
+    rr(ctx, off - s * 0.11, -s * 1.3 + rec, s * 0.22, s * 1.0, s * 0.1);
+    ctx.fillStyle = darken(color, 0.3);
+    ctx.fill();
+    ink(ctx, s, 0.8);
+  }
+  if (t.recoil > 0.4) muzzleFlash(ctx, s, 0, -s * 1.4 + rec, 0.34);
+  ctx.restore();
+
+  // domed head; eyes stay upright and track the target
+  ctx.beginPath();
+  ctx.arc(0, -s * 0.42 + bob, s * 0.62, 0, Math.PI * 2);
+  paint(ctx, color, s * 0.62);
+  ink(ctx, s);
+  gloss(ctx, s * 0.62, 0.5);
+  eyes(ctx, s * 0.62, look, { ratio: 0.28, gap: 0.38, cy: -0.15, blink });
+}
+
+function cryoArt(ctx, t, s, time, bob) {
+  const color = t.def.color;
+  const seed = t.col * 7.13 + t.row * 3.71;
+  const blink = ((time * 0.55 + seed) % 3.6) < 0.13;
+  const cy = -s * 0.6 + bob * 1.6;
+
+  // frosty mist pooled at the base
+  ctx.save();
+  ctx.beginPath();
+  ctx.ellipse(0, s * 0.78 + bob, s * 1.0, s * 0.3, 0, 0, Math.PI * 2);
+  ctx.fillStyle = `rgba(160,255,225,${0.16 + 0.06 * Math.sin(time * 2 + seed)})`;
+  ctx.fill();
+  ctx.restore();
+
+  // chiselled ice plinth
+  roundPoly(ctx, [P(-s * 0.8, s * 1.06), P(s * 0.8, s * 1.06), P(s * 0.5, s * 0.3), P(-s * 0.5, s * 0.3)], 0.35);
+  paint(ctx, color, s * 1.15);
+  ink(ctx, s);
+
+  // floating snowflake crystal, slowly spinning and breathing
+  ctx.save();
+  ctx.translate(0, cy);
+  const pulse = 1 + 0.06 * Math.sin(time * 2.4 + seed);
+  ctx.beginPath();
+  for (let i = 0; i < 12; i++) {
+    const a = time * 0.7 + (Math.PI / 6) * i;
+    const r = (i % 2 === 0 ? s * 0.68 : s * 0.3) * pulse;
+    const px = Math.cos(a) * r;
+    const py = Math.sin(a) * r;
+    i === 0 ? ctx.moveTo(px, py) : ctx.lineTo(px, py);
+  }
+  ctx.closePath();
+  paint(ctx, color, s * 0.75);
+  ink(ctx, s);
+  gloss(ctx, s * 0.5, 0.5);
+  eyes(ctx, s * 0.55, { x: Math.cos(t.angle), y: Math.sin(t.angle) }, { ratio: 0.3, gap: 0.36, cy: -0.1, blink });
+  ctx.restore();
+
+  // orbiting ice shards
+  for (let i = 0; i < 3; i++) {
+    const a = time * 1.5 + (i * Math.PI * 2) / 3;
+    ctx.save();
+    ctx.translate(Math.cos(a) * s * 0.98, cy + Math.sin(a) * s * 0.44);
+    ctx.rotate(a);
+    roundPoly(ctx, [P(0, -s * 0.2), P(s * 0.17, s * 0.14), P(-s * 0.17, s * 0.14)], 0.4);
+    ctx.fillStyle = lighten(color, 0.45);
+    ctx.fill();
+    ink(ctx, s, 0.5);
+    ctx.restore();
+  }
+}
+
+function arcArt(ctx, t, s, time, bob) {
+  const color = t.def.color;
+  const seed = t.col * 7.13 + t.row * 3.71;
+  const blink = ((time * 0.55 + seed) % 3.6) < 0.13;
+  const look = { x: Math.cos(t.angle), y: Math.sin(t.angle) };
+
+  // heavy trapezoid base
+  roundPoly(ctx, [P(-s * 0.85, s * 1.08), P(s * 0.85, s * 1.08), P(s * 0.62, s * 0.2), P(-s * 0.62, s * 0.2)], 0.4);
+  paint(ctx, color, s * 1.15);
+  ink(ctx, s);
+  emblem(ctx, t, s, s * 0.72 + bob);
+
+  // coil windings stacked up the column
+  for (let i = 0; i < 3; i++) {
+    const w = s * (0.56 - 0.13 * i);
+    rr(ctx, -w, s * (0.06 - i * 0.3) + bob, w * 2, s * 0.24, s * 0.1);
+    ctx.fillStyle = i % 2 ? darken(color, 0.35) : lighten(color, 0.25);
+    ctx.fill();
+    ink(ctx, s, 0.6);
+  }
+
+  // toroid ring + plasma ball electrode
+  const ty = -s * 1.02 + bob;
+  ctx.beginPath();
+  ctx.ellipse(0, ty, s * 0.62, s * 0.26, 0, 0, Math.PI * 2);
+  paint(ctx, color, s * 0.7);
+  ink(ctx, s, 0.85);
+  for (const side of [-1, 1]) {
+    ctx.strokeStyle = INK;
+    ctx.lineWidth = Math.max(1.2, s * 0.11);
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(side * s * 0.52, ty - s * 0.06);
+    ctx.lineTo(side * s * 0.66, ty - s * 0.3);
+    ctx.stroke();
+  }
+
+  const by = ty - s * 0.44;
+  ctx.beginPath();
+  ctx.arc(0, by, s * 0.5, 0, Math.PI * 2);
+  ctx.fillStyle = `rgba(179,102,255,${0.18 + 0.1 * Math.sin(time * 5 + seed)})`;
+  ctx.fill();
+  ctx.beginPath();
+  ctx.arc(0, by, s * 0.3, 0, Math.PI * 2);
+  paint(ctx, lighten(color, 0.35), s * 0.34);
+  ink(ctx, s, 0.7);
+
+  // arcs spark from the ball to the ring right after firing
+  if (t.recoil > 0.05) {
+    const zt = Math.floor(time * 18) * 1.37;
+    zigZap(ctx, 0, by, -s * 0.55, ty, s, zt);
+    zigZap(ctx, 0, by, s * 0.55, ty, s, zt + 9.1);
+  }
+
+  eyes(ctx, s * 0.3, look, { ratio: 0.3, gap: 0.34, cy: -0.05, blink });
+}
+
+function railArt(ctx, t, s, time, bob) {
+  const color = t.def.color;
+  const seed = t.col * 7.13 + t.row * 3.71;
+  const blink = ((time * 0.55 + seed) % 3.6) < 0.13;
+  const look = { x: Math.cos(t.angle), y: Math.sin(t.angle) };
+
+  // gantry legs + long angular platform
+  for (const side of [-1, 1]) {
+    rr(ctx, side * s * 0.62 - s * 0.17, s * 0.72 + bob, s * 0.34, s * 0.4, s * 0.12);
+    ctx.fillStyle = darken(color, 0.4);
+    ctx.fill();
+    ink(ctx, s, 0.6);
+  }
+  roundPoly(ctx, [P(-s, s * 0.78), P(s, s * 0.78), P(s * 0.7, s * 0.04), P(-s * 0.7, s * 0.04)], 0.28);
+  paint(ctx, color, s * 1.1);
+  ink(ctx, s);
+  emblem(ctx, t, s, s * 0.48 + bob);
+
+  // very long rail barrel: guide rails + glowing charge strip, slides on recoil
+  ctx.save();
+  ctx.translate(0, -s * 0.3 + bob);
+  ctx.rotate(t.angle + Math.PI / 2);
+  const rec = t.recoil * s * 0.3;
+  for (const off of [-s * 0.34, s * 0.34]) {
+    rr(ctx, off - s * 0.07, -s * 1.42 + rec, s * 0.14, s * 1.42, s * 0.07);
+    ctx.fillStyle = darken(color, 0.4);
+    ctx.fill();
+    ink(ctx, s, 0.55);
+  }
+  rr(ctx, -s * 0.18, -s * 1.78 + rec, s * 0.36, s * 1.72, s * 0.14);
+  ctx.fillStyle = darken(color, 0.12);
+  ctx.fill();
+  ink(ctx, s, 0.8);
+  ctx.globalAlpha = 0.4 + 0.6 * Math.abs(Math.sin(time * 6 + seed));
+  rr(ctx, -s * 0.05, -s * 1.68 + rec, s * 0.1, s * 1.5, s * 0.05);
+  ctx.fillStyle = lighten(color, 0.7);
+  ctx.fill();
+  ctx.globalAlpha = 1;
+  // muzzle brake
+  roundPoly(ctx, [P(0, -s * 1.95 + rec), P(s * 0.2, -s * 1.75 + rec), P(0, -s * 1.55 + rec), P(-s * 0.2, -s * 1.75 + rec)], 0.3);
+  ctx.fillStyle = lighten(color, 0.3);
+  ctx.fill();
+  ink(ctx, s, 0.7);
+  if (t.recoil > 0.5) muzzleFlash(ctx, s, 0, -s * 1.95 + rec, 0.5);
+  ctx.restore();
+
+  // boxy scope head
+  rr(ctx, -s * 0.52, -s * 0.86 + bob, s * 1.04, s * 1.0, s * 0.32);
+  paint(ctx, color, s * 0.85);
+  ink(ctx, s);
+  gloss(ctx, s * 0.7, 0.5);
+  eyes(ctx, s * 0.7, look, { ratio: 0.26, gap: 0.38, cy: -0.15, angry: true, blink });
+}
+
+const TOWER_ART = { pulse: pulseArt, cryo: cryoArt, arc: arcArt, rail: railArt };
+
 export function drawToonTower(ctx, t, cell, time) {
   const s = cell * 0.38;
-  const color = t.def.color;
-  const bob = Math.sin(time * 3 + t.col * 1.7 + t.row) * s * 0.04;
-
+  const bob = Math.sin(time * 3 + t.col * 1.7 + t.row) * s * 0.05;
   groundShadow(ctx, s * 1.05, 1.05);
-
-  // pedestal
-  rr(ctx, -s * 0.98, -s * 0.35 + bob, s * 1.96, s * 1.45, s * 0.5);
-  paint(ctx, color, s * 1.2);
-  ink(ctx, s);
+  (TOWER_ART[t.key] || pulseArt)(ctx, t, s, time, bob);
 
   // level pips
   for (let i = 0; i < t.level; i++) {
     ctx.beginPath();
-    ctx.arc((i - (t.level - 1) / 2) * s * 0.46, s * 0.95 + bob, s * 0.15, 0, Math.PI * 2);
+    ctx.arc((i - (t.level - 1) / 2) * s * 0.46, s * 1.02 + bob, s * 0.15, 0, Math.PI * 2);
     ctx.fillStyle = PALETTE.yellow;
     ctx.fill();
     ink(ctx, s, 0.5);
   }
-
-  // barrel follows the aim, pushed back by recoil
-  ctx.save();
-  ctx.translate(0, -s * 0.5 + bob);
-  ctx.rotate(t.angle + Math.PI / 2);
-  const rec = t.recoil * s * 0.3;
-  rr(ctx, -s * 0.26, -s * 1.15 + rec, s * 0.52, s * 1.0, s * 0.22);
-  ctx.fillStyle = darken(color, 0.15);
-  ctx.fill();
-  ink(ctx, s, 0.85);
-  ctx.restore();
-
-  // head dome
-  ctx.save();
-  ctx.translate(0, -s * 0.5 + bob);
-  ctx.beginPath();
-  ctx.arc(0, 0, s * 0.78, 0, Math.PI * 2);
-  paint(ctx, color, s * 0.8);
-  ink(ctx, s);
-  gloss(ctx, s * 0.8, 0.55);
-
-  const look = { x: Math.cos(t.angle), y: Math.sin(t.angle) };
-  eyes(ctx, s * 0.78, look, { ratio: 0.3, gap: 0.4, cy: -0.25 });
-
-  ctx.font = `bold ${Math.round(s * 0.86)}px ${TOON_FONT}`;
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.lineWidth = Math.max(1.6, s * 0.26);
-  ctx.strokeStyle = INK;
-  ctx.lineJoin = 'round';
-  ctx.strokeText(t.def.glyph, 0, s * 0.38);
-  ctx.fillStyle = '#ffffff';
-  ctx.fillText(t.def.glyph, 0, s * 0.38);
-  ctx.restore();
 }
 
 // Outlined text used by floating damage / credit numbers.

@@ -320,6 +320,7 @@ class Game {
     if (!target) return;
     const s = t.stats;
     t.cool = 1 / s.fireRate;
+    t.recoil = 1;
     t.angle = Math.atan2(target.y - (t.row + 0.5), target.x - (t.col + 0.5));
     const cx = t.col + 0.5;
     const cy = t.row + 0.5;
