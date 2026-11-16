@@ -157,7 +157,7 @@ async function runViewport(browser, vp) {
   await ctx.close();
 }
 
-const browser = await chromium.launch();
+const browser = await chromium.launch(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {});
 for (const vp of VIEWPORTS) await runViewport(browser, vp);
 await browser.close();
 

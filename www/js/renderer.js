@@ -1,7 +1,8 @@
-// renderer.js — Canvas 2D at native DPR: grid, towers, enemies, projectiles, beams, VFX.
+// renderer.js — Canvas 2D at native DPR: meadow backdrop, grid, towers, enemies, projectiles, beams, VFX.
 // Characters are drawn with the toon.js cartoon helpers; projectiles/beams/particles stay neon.
 import { GRID, PALETTE } from './config.js';
 import { drawToonEnemy, drawToonTower, toonText } from './toon.js';
+import { Landscape } from './landscape.js';
 
 export class Renderer {
   constructor(canvas) {
@@ -12,6 +13,7 @@ export class Renderer {
     this.ox = 0;
     this.oy = 0;
     this.time = 0; // seconds since load, drives toon idle animations
+    this.landscape = new Landscape();
     this.resize();
   }
 
@@ -28,6 +30,12 @@ export class Renderer {
     this.cell = Math.floor(Math.min(cssW / GRID.cols, cssH / GRID.rows));
     this.ox = Math.round((cssW - this.cell * GRID.cols) / 2);
     this.oy = Math.round((cssH - this.cell * GRID.rows) / 2);
+    this.landscape.build(cssW, cssH, this.dpr, {
+      x: this.ox,
+      y: this.oy,
+      w: this.cell * GRID.cols,
+      h: this.cell * GRID.rows,
+    });
   }
 
   // Screen CSS px -> grid float coords
@@ -43,6 +51,7 @@ export class Renderer {
     this.time = performance.now() / 1000;
     ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
     ctx.clearRect(0, 0, this.canvas.width / this.dpr, this.canvas.height / this.dpr);
+    this.landscape.draw(ctx, this.time);
   }
 
   drawGrid(hover) {
@@ -50,10 +59,14 @@ export class Renderer {
     const w = cell * GRID.cols;
     const h = cell * GRID.rows;
     ctx.save();
-    ctx.fillStyle = 'rgba(8,11,30,0.85)';
+    // Translucent panel so the meadow shows through while cells stay legible.
+    ctx.fillStyle = 'rgba(10,26,18,0.4)';
     ctx.fillRect(this.ox, this.oy, w, h);
+    ctx.strokeStyle = 'rgba(255,255,255,0.28)';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(this.ox + 1, this.oy + 1, w - 2, h - 2);
 
-    ctx.strokeStyle = PALETTE.gridSoft;
+    ctx.strokeStyle = 'rgba(255,255,255,0.16)';
     ctx.lineWidth = 1;
     ctx.beginPath();
     for (let c = 0; c <= GRID.cols; c++) {

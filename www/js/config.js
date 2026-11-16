@@ -10,7 +10,6 @@ export const GRID = {
 export const PALETTE = {
   bg: '#05060f',
   grid: '#1b2a6b',
-  gridSoft: 'rgba(27,42,107,0.45)',
   cyan: '#00e5ff',
   magenta: '#ff2d95',
   green: '#00ff9d',
