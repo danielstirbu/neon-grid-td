@@ -355,55 +355,79 @@ export function drawToonEnemy(ctx, e, s, time) {
   if (e.shape === 'square') shield(ctx, s, e, lighten(color, 0.2));
 }
 
-// Each tower has its own silhouette that telegraphs its role:
-// pulse = fast twin-barrel gatling, cryo = floating frost crystal, arc = tesla coil,
-// rail = long sniper cannon. All share shadow, bob, and level pips.
+// Each tower has its own hard-surface silhouette that telegraphs its role:
+// pulse = dual plasma rails, cryo = levitating frost core over radiator fins,
+// arc = tesla node with prongs and plasma ball, rail = long coil railgun.
+// All share the octagonal tech pad, shadow, bob, and level pips.
 function jit(n) {
   return Math.abs((Math.sin(n * 127.1) * 43758.5453) % 1);
 }
 
-function emblem(ctx, t, s, y) {
-  ctx.font = `bold ${Math.round(s * 0.62)}px ${TOON_FONT}`;
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.lineJoin = 'round';
-  ctx.lineWidth = Math.max(1.4, s * 0.2);
-  ctx.strokeStyle = INK;
-  ctx.strokeText(t.def.glyph, 0, y);
-  ctx.fillStyle = '#ffffff';
-  ctx.fillText(t.def.glyph, 0, y);
-}
-
-function muzzleFlash(ctx, s, x, y, len) {
-  ctx.save();
-  ctx.translate(x, y);
-  ctx.beginPath();
-  for (let i = 0; i < 8; i++) {
-    const a = (Math.PI / 4) * i;
-    const r = i % 2 ? s * 0.16 : s * len;
-    const px = Math.cos(a) * r;
-    const py = Math.sin(a) * r;
-    i === 0 ? ctx.moveTo(px, py) : ctx.lineTo(px, py);
-  }
-  ctx.closePath();
-  ctx.fillStyle = 'rgba(255,255,255,0.9)';
-  ctx.fill();
-  ctx.restore();
-}
-
-function zigZap(ctx, x0, y0, x1, y1, s, seedT) {
-  ctx.save();
+// Jittered lightning segment; q should advance per tick, not per frame.
+function sparkLine(ctx, x0, y0, x1, y1, amp, q, seed) {
   ctx.beginPath();
   ctx.moveTo(x0, y0);
   for (let i = 1; i < 4; i++) {
     const f = i / 4;
-    ctx.lineTo(x0 + (x1 - x0) * f + (jit(seedT + i * 7.3) - 0.5) * s * 0.55,
-      y0 + (y1 - y0) * f + (jit(seedT + i * 3.7) - 0.5) * s * 0.4);
+    ctx.lineTo(x0 + (x1 - x0) * f + (jit(seed + q + i * 7.3) - 0.5) * amp,
+      y0 + (y1 - y0) * f + (jit(seed - q + i * 3.7) - 0.5) * amp * 0.7);
   }
   ctx.lineTo(x1, y1);
-  ctx.strokeStyle = '#ffffff';
-  ctx.lineWidth = Math.max(1, s * 0.1);
-  ctx.lineCap = 'round';
+  ctx.stroke();
+}
+
+function octPath(ctx, r, squash = 0.72) {
+  ctx.beginPath();
+  for (let i = 0; i < 8; i++) {
+    const a = (Math.PI / 4) * i + Math.PI / 8;
+    const x = Math.cos(a) * r * 1.06;
+    const y = Math.sin(a) * r * squash;
+    i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+  }
+  ctx.closePath();
+}
+
+function metalGrad(ctx, s, y0, y1, top = '#57668a', mid = '#2c3752', bot = '#151b2c') {
+  const g = ctx.createLinearGradient(0, s * y0, 0, s * y1);
+  g.addColorStop(0, top);
+  g.addColorStop(0.45, mid);
+  g.addColorStop(1, bot);
+  return g;
+}
+
+// Family look shared by every turret: octagonal tech pad with emissive rim,
+// bolts and panel seams. glow is 0..1 idle breathing of the rim light.
+function techPad(ctx, s, color, bob, glow) {
+  ctx.save();
+  ctx.translate(0, s * 0.42 + bob);
+  octPath(ctx, s * 0.95);
+  const pad = ctx.createLinearGradient(0, -s * 0.72, 0, s * 0.72);
+  pad.addColorStop(0, '#39445f');
+  pad.addColorStop(0.5, '#232c44');
+  pad.addColorStop(1, '#141a2c');
+  ctx.fillStyle = pad;
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(8,12,22,0.9)';
+  ctx.lineWidth = Math.max(1, s * 0.06);
+  ctx.stroke();
+  ctx.save();
+  octPath(ctx, s * 0.76);
+  ctx.strokeStyle = color;
+  ctx.globalAlpha = 0.3 + 0.3 * glow;
+  ctx.shadowColor = color;
+  ctx.shadowBlur = s * 0.45;
+  ctx.lineWidth = Math.max(1, s * 0.05);
+  ctx.stroke();
+  ctx.restore();
+  ctx.fillStyle = '#55627f';
+  for (const bx of [-0.74, 0.74]) for (const by of [-0.26, 0.3]) bolt(ctx, s * bx, s * by, s * 0.07);
+  ctx.strokeStyle = 'rgba(10,14,26,0.55)';
+  ctx.lineWidth = Math.max(1, s * 0.03);
+  ctx.beginPath();
+  ctx.moveTo(-s * 0.42, -s * 0.5);
+  ctx.lineTo(-s * 0.42, s * 0.5);
+  ctx.moveTo(s * 0.42, -s * 0.5);
+  ctx.lineTo(s * 0.42, s * 0.5);
   ctx.stroke();
   ctx.restore();
 }
@@ -429,49 +453,7 @@ function pulseArt(ctx, t, s, time, bob) {
   const heat = t.recoil;
   const edge = 'rgba(8,12,22,0.9)';
 
-  // --- static octagonal tech pad with emissive rim ---
-  ctx.save();
-  ctx.translate(0, s * 0.42 + bob);
-  const oct = (r) => {
-    ctx.beginPath();
-    for (let i = 0; i < 8; i++) {
-      const a = (Math.PI / 4) * i + Math.PI / 8;
-      const x = Math.cos(a) * r * 1.06;
-      const y = Math.sin(a) * r * 0.72;
-      i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
-    }
-    ctx.closePath();
-  };
-  oct(s * 0.95);
-  const pad = ctx.createLinearGradient(0, -s * 0.72, 0, s * 0.72);
-  pad.addColorStop(0, '#39445f');
-  pad.addColorStop(0.5, '#232c44');
-  pad.addColorStop(1, '#141a2c');
-  ctx.fillStyle = pad;
-  ctx.fill();
-  ctx.strokeStyle = edge;
-  ctx.lineWidth = Math.max(1, s * 0.06);
-  ctx.stroke();
-  ctx.save();
-  oct(s * 0.76);
-  ctx.strokeStyle = color;
-  ctx.globalAlpha = 0.3 + 0.3 * idle;
-  ctx.shadowColor = color;
-  ctx.shadowBlur = s * 0.45;
-  ctx.lineWidth = Math.max(1, s * 0.05);
-  ctx.stroke();
-  ctx.restore();
-  ctx.fillStyle = '#55627f';
-  for (const bx of [-0.74, 0.74]) for (const by of [-0.26, 0.3]) bolt(ctx, s * bx, s * by, s * 0.07);
-  ctx.strokeStyle = 'rgba(10,14,26,0.55)';
-  ctx.lineWidth = Math.max(1, s * 0.03);
-  ctx.beginPath();
-  ctx.moveTo(-s * 0.42, -s * 0.5);
-  ctx.lineTo(-s * 0.42, s * 0.5);
-  ctx.moveTo(s * 0.42, -s * 0.5);
-  ctx.lineTo(s * 0.42, s * 0.5);
-  ctx.stroke();
-  ctx.restore();
+  techPad(ctx, s, color, bob, idle);
 
   // --- rotating turret, recoil slides along the aim axis ---
   ctx.save();
@@ -645,168 +627,393 @@ function pulseArt(ctx, t, s, time, bob) {
   ctx.restore();
 }
 
+// Cryo Emitter: levitating frost core held over a magnetic yoke with radiator
+// fins; vents cold vapor, emits an expanding slow-field pulse when it fires.
 function cryoArt(ctx, t, s, time, bob) {
   const color = t.def.color;
   const seed = t.col * 7.13 + t.row * 3.71;
-  const blink = ((time * 0.55 + seed) % 3.6) < 0.13;
-  const cy = -s * 0.6 + bob * 1.6;
+  const idle = 0.5 + 0.5 * Math.sin(time * 2.2 + seed);
+  const heat = t.recoil;
+  const edge = 'rgba(8,12,22,0.9)';
+  techPad(ctx, s, color, bob, idle);
 
-  // frosty mist pooled at the base
+  // cold mist pooled on the pad
   ctx.save();
   ctx.beginPath();
-  ctx.ellipse(0, s * 0.78 + bob, s * 1.0, s * 0.3, 0, 0, Math.PI * 2);
-  ctx.fillStyle = `rgba(160,255,225,${0.16 + 0.06 * Math.sin(time * 2 + seed)})`;
+  ctx.ellipse(0, s * 0.7 + bob, s * 0.92, s * 0.26, 0, 0, Math.PI * 2);
+  ctx.fillStyle = `rgba(160,255,225,${0.1 + 0.06 * idle + 0.1 * heat})`;
   ctx.fill();
   ctx.restore();
 
-  // chiselled ice plinth
-  roundPoly(ctx, [P(-s * 0.8, s * 1.06), P(s * 0.8, s * 1.06), P(s * 0.5, s * 0.3), P(-s * 0.5, s * 0.3)], 0.35);
-  paint(ctx, color, s * 1.15);
-  ink(ctx, s);
-
-  // floating snowflake crystal, slowly spinning and breathing
+  // radiator fins venting the coolant loop
   ctx.save();
-  ctx.translate(0, cy);
-  const pulse = 1 + 0.06 * Math.sin(time * 2.4 + seed);
-  ctx.beginPath();
-  for (let i = 0; i < 12; i++) {
-    const a = time * 0.7 + (Math.PI / 6) * i;
-    const r = (i % 2 === 0 ? s * 0.68 : s * 0.3) * pulse;
-    const px = Math.cos(a) * r;
-    const py = Math.sin(a) * r;
-    i === 0 ? ctx.moveTo(px, py) : ctx.lineTo(px, py);
-  }
-  ctx.closePath();
-  paint(ctx, color, s * 0.75);
-  ink(ctx, s);
-  gloss(ctx, s * 0.5, 0.5);
-  eyes(ctx, s * 0.55, { x: Math.cos(t.angle), y: Math.sin(t.angle) }, { ratio: 0.3, gap: 0.36, cy: -0.1, blink });
-  ctx.restore();
-
-  // orbiting ice shards
-  for (let i = 0; i < 3; i++) {
-    const a = time * 1.5 + (i * Math.PI * 2) / 3;
+  ctx.translate(0, s * 0.16 + bob);
+  for (let i = 0; i < 6; i++) {
     ctx.save();
-    ctx.translate(Math.cos(a) * s * 0.98, cy + Math.sin(a) * s * 0.44);
-    ctx.rotate(a);
-    roundPoly(ctx, [P(0, -s * 0.2), P(s * 0.17, s * 0.14), P(-s * 0.17, s * 0.14)], 0.4);
-    ctx.fillStyle = lighten(color, 0.45);
+    ctx.rotate((Math.PI / 3) * i + Math.PI / 6);
+    chamferPath(ctx, [[s * 0.42, -s * 0.1], [s * 0.88, -s * 0.05], [s * 0.88, s * 0.05], [s * 0.42, s * 0.1]]);
+    ctx.fillStyle = '#232c44';
     ctx.fill();
-    ink(ctx, s, 0.5);
+    ctx.strokeStyle = edge;
+    ctx.lineWidth = Math.max(1, s * 0.035);
+    ctx.stroke();
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.fillStyle = color;
+    ctx.globalAlpha = 0.15 + 0.3 * heat + 0.1 * idle;
+    ctx.fillRect(s * 0.5, -s * 0.03, s * 0.32, s * 0.06);
+    ctx.restore();
     ctx.restore();
   }
+
+  // emitter pedestal with magnetic yoke collar
+  chamferPath(ctx, [[-s * 0.52, s * 0.42], [s * 0.52, s * 0.42], [s * 0.34, -s * 0.14], [-s * 0.34, -s * 0.14]]);
+  ctx.fillStyle = metalGrad(ctx, s, -0.14, 0.42, '#4a5878', '#26304a', '#131a2b');
+  ctx.fill();
+  ctx.strokeStyle = edge;
+  ctx.lineWidth = Math.max(1, s * 0.05);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.ellipse(0, -s * 0.14, s * 0.36, s * 0.12, 0, 0, Math.PI * 2);
+  ctx.fillStyle = '#101625';
+  ctx.fill();
+  ctx.strokeStyle = edge;
+  ctx.lineWidth = Math.max(1, s * 0.04);
+  ctx.stroke();
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  ctx.strokeStyle = color;
+  ctx.globalAlpha = 0.5 + 0.3 * idle;
+  ctx.beginPath();
+  ctx.ellipse(0, -s * 0.14, s * 0.36, s * 0.12, 0, 0, Math.PI * 2);
+  ctx.stroke();
+  // aim notch slides around the yoke toward the target
+  const ax = Math.cos(t.angle) * s * 0.36;
+  const ay = -s * 0.14 + Math.sin(t.angle) * s * 0.12;
+  ctx.fillStyle = color;
+  ctx.shadowColor = color;
+  ctx.shadowBlur = s * 0.4;
+  bolt(ctx, ax, ay, s * 0.07);
+  ctx.restore();
+  ctx.restore();
+
+  // levitating ice core (spinning bipyramid) over the yoke
+  const cy = -s * 0.62 + bob + Math.sin(time * 1.8 + seed) * s * 0.07;
+  ctx.save();
+  ctx.translate(0, cy);
+
+  // levitation field beam
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  const beam = ctx.createLinearGradient(0, s * 0.42, 0, 0);
+  beam.addColorStop(0, `rgba(160,255,225,${0.35 + 0.2 * idle})`);
+  beam.addColorStop(1, 'rgba(160,255,225,0)');
+  ctx.fillStyle = beam;
+  ctx.fillRect(-s * 0.2, 0, s * 0.4, s * 0.44);
+  ctx.restore();
+
+  // gyro ring with ice shard fins, slow precession
+  const ringN = t.level >= 3 ? 4 : 3;
+  ctx.save();
+  ctx.rotate(Math.sin(time * 0.6 + seed) * 0.25);
+  ctx.strokeStyle = '#39445f';
+  ctx.lineWidth = Math.max(1, s * 0.06);
+  ctx.beginPath();
+  ctx.ellipse(0, s * 0.04, s * (0.6 + 0.08 * t.level), s * 0.2, 0, 0, Math.PI * 2);
+  ctx.stroke();
+  for (let i = 0; i < ringN; i++) {
+    const a = time * 1.4 + (Math.PI * 2 * i) / ringN;
+    const fx = Math.cos(a) * s * (0.6 + 0.08 * t.level);
+    const fy = s * 0.04 + Math.sin(a) * s * 0.2;
+    ctx.save();
+    ctx.translate(fx, fy);
+    ctx.globalAlpha = 0.65 + 0.35 * Math.sin(a);
+    chamferPath(ctx, [[0, -s * 0.14], [s * 0.09, s * 0.08], [-s * 0.09, s * 0.08]]);
+    ctx.fillStyle = '#c6f7ff';
+    ctx.fill();
+    ctx.strokeStyle = edge;
+    ctx.lineWidth = Math.max(1, s * 0.03);
+    ctx.stroke();
+    ctx.restore();
+  }
+  ctx.restore();
+
+  // the core itself: vertical bipyramid, fake 3D spin via width, additive glow
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  const h = s * (0.7 + 0.06 * idle);
+  const glowG = ctx.createRadialGradient(0, 0, 0, 0, 0, h);
+  glowG.addColorStop(0, `rgba(190,255,240,${0.5 + 0.3 * heat})`);
+  glowG.addColorStop(1, 'rgba(0,255,157,0)');
+  ctx.fillStyle = glowG;
+  ctx.beginPath();
+  ctx.arc(0, 0, h, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+  const spin = time * 1.2 + seed;
+  const hw = s * (0.12 + 0.24 * Math.abs(Math.cos(spin)));
+  chamferPath(ctx, [[0, -h * 0.62], [hw, -h * 0.04], [0, h * 0.62], [-hw, -h * 0.04]]);
+  const ice = ctx.createLinearGradient(-hw, 0, hw, 0);
+  ice.addColorStop(0, '#eafffb');
+  ice.addColorStop(0.5, color);
+  ice.addColorStop(1, '#0f6f66');
+  ctx.fillStyle = ice;
+  ctx.fill();
+  ctx.strokeStyle = edge;
+  ctx.lineWidth = Math.max(1, s * 0.04);
+  ctx.stroke();
+  ctx.strokeStyle = 'rgba(255,255,255,0.5)';
+  ctx.beginPath();
+  ctx.moveTo(-hw * 0.45, -h * 0.36);
+  ctx.lineTo(-hw * 0.12, -h * 0.06);
+  ctx.stroke();
+
+  // slow-field pulse ring on fire
+  if (heat > 0.05) {
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.globalAlpha = heat * 0.85;
+    ctx.strokeStyle = color;
+    ctx.lineWidth = Math.max(1, s * 0.08 * heat);
+    ctx.beginPath();
+    ctx.ellipse(0, s * 0.04, s * (0.3 + (1 - heat) * 1.05), s * (0.1 + (1 - heat) * 0.34), 0, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+  }
+  ctx.restore();
 }
 
+// Arc Node: tesla discharge tower — stacked capacitor plates, HV mast, corona
+// ring with charged prongs, plasma ball that arcs continuously when firing.
 function arcArt(ctx, t, s, time, bob) {
   const color = t.def.color;
   const seed = t.col * 7.13 + t.row * 3.71;
-  const blink = ((time * 0.55 + seed) % 3.6) < 0.13;
-  const look = { x: Math.cos(t.angle), y: Math.sin(t.angle) };
+  const idle = 0.5 + 0.5 * Math.sin(time * 3.1 + seed);
+  const heat = t.recoil;
+  const edge = 'rgba(8,12,22,0.9)';
+  techPad(ctx, s, color, bob, idle);
 
-  // heavy trapezoid base
-  roundPoly(ctx, [P(-s * 0.85, s * 1.08), P(s * 0.85, s * 1.08), P(s * 0.62, s * 0.2), P(-s * 0.62, s * 0.2)], 0.4);
-  paint(ctx, color, s * 1.15);
-  ink(ctx, s);
-  emblem(ctx, t, s, s * 0.72 + bob);
-
-  // coil windings stacked up the column
+  // stacked capacitor plates with energy bleed between them
   for (let i = 0; i < 3; i++) {
-    const w = s * (0.56 - 0.13 * i);
-    rr(ctx, -w, s * (0.06 - i * 0.3) + bob, w * 2, s * 0.24, s * 0.1);
-    ctx.fillStyle = i % 2 ? darken(color, 0.35) : lighten(color, 0.25);
+    const w = s * (0.62 - 0.15 * i);
+    const y = s * (0.36 - 0.3 * i) + bob;
+    chamferPath(ctx, [[-w, y + s * 0.1], [w, y + s * 0.1], [w * 0.78, y - s * 0.1], [-w * 0.78, y - s * 0.1]]);
+    ctx.fillStyle = metalGrad(ctx, s, -0.12 + (0.36 - 0.3 * i), 0.12 + (0.36 - 0.3 * i));
     ctx.fill();
-    ink(ctx, s, 0.6);
+    ctx.strokeStyle = edge;
+    ctx.lineWidth = Math.max(1, s * 0.045);
+    ctx.stroke();
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.fillStyle = color;
+    ctx.globalAlpha = 0.25 + 0.25 * jit(seed + i * 3 + Math.floor(time * 6)) + 0.4 * heat;
+    ctx.fillRect(-w * 0.6, y + s * 0.1, w * 1.2, Math.max(1, s * 0.035));
+    ctx.restore();
   }
 
-  // toroid ring + plasma ball electrode
-  const ty = -s * 1.02 + bob;
-  ctx.beginPath();
-  ctx.ellipse(0, ty, s * 0.62, s * 0.26, 0, 0, Math.PI * 2);
-  paint(ctx, color, s * 0.7);
-  ink(ctx, s, 0.85);
-  for (const side of [-1, 1]) {
-    ctx.strokeStyle = INK;
-    ctx.lineWidth = Math.max(1.2, s * 0.11);
-    ctx.lineCap = 'round';
+  // HV mast
+  chamferPath(ctx, [[-s * 0.14, s * 0.28], [s * 0.14, s * 0.28], [s * 0.1, -s * 0.86], [-s * 0.1, -s * 0.86]]);
+  ctx.fillStyle = '#1b2236';
+  ctx.fill();
+  ctx.strokeStyle = edge;
+  ctx.lineWidth = Math.max(1, s * 0.045);
+  ctx.stroke();
+
+  // corona ring (flat octagon) with charged prongs
+  const ry = -s * (t.level >= 3 ? 0.94 : 0.86) + bob;
+  ctx.save();
+  ctx.translate(0, ry);
+  octPath(ctx, s * 0.4, 0.3);
+  ctx.fillStyle = '#39445f';
+  ctx.fill();
+  ctx.strokeStyle = edge;
+  ctx.lineWidth = Math.max(1, s * 0.045);
+  ctx.stroke();
+  const prongN = t.level >= 3 ? 4 : 3;
+  const q = Math.floor(time * 20);
+  const tips = [];
+  for (let i = 0; i < prongN; i++) {
+    const a = (Math.PI * 2 * i) / prongN + time * 0.4 + seed;
+    const px = Math.cos(a) * s * 0.4;
+    const py = Math.sin(a) * s * 0.12;
+    const tx = Math.cos(a) * s * 0.62;
+    const ty = py - s * 0.42;
+    tips.push([tx, ty]);
     ctx.beginPath();
-    ctx.moveTo(side * s * 0.52, ty - s * 0.06);
-    ctx.lineTo(side * s * 0.66, ty - s * 0.3);
+    ctx.moveTo(px, py);
+    ctx.lineTo(tx, ty);
+    ctx.strokeStyle = '#55627f';
+    ctx.lineWidth = Math.max(1, s * 0.07);
+    ctx.lineCap = 'round';
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(tx, ty, s * 0.06, 0, Math.PI * 2);
+    ctx.fillStyle = color;
+    ctx.fill();
+  }
+
+  // plasma ball electrode
+  const by = -s * 0.34;
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  const orb = s * (0.2 + 0.05 * idle + 0.22 * heat);
+  const og = ctx.createRadialGradient(0, by, 0, 0, by, orb * 1.6);
+  og.addColorStop(0, 'rgba(240,225,255,0.95)');
+  og.addColorStop(0.4, color);
+  og.addColorStop(1, 'rgba(179,102,255,0)');
+  ctx.fillStyle = og;
+  ctx.beginPath();
+  ctx.arc(0, by, orb * 1.6, 0, Math.PI * 2);
+  ctx.fill();
+  // discharge arcs ball -> prong tips
+  const storm = heat > 0.1 ? heat : idle > 0.88 ? 0.45 : 0;
+  if (storm > 0) {
+    ctx.globalAlpha = Math.min(1, 0.35 + storm);
+    ctx.strokeStyle = '#f2e9ff';
+    ctx.lineWidth = Math.max(1, s * 0.05);
+    ctx.lineCap = 'round';
+    for (let i = 0; i < tips.length; i++) {
+      if (jit(seed + q + i * 11.7) < 0.45 && storm < 0.6) continue;
+      sparkLine(ctx, 0, by, tips[i][0], tips[i][1], s * 0.22, q + i * 3.1, seed);
+    }
+  }
+  if (t.level >= 3) {
+    ctx.globalAlpha = 0.35 + 0.3 * idle;
+    ctx.strokeStyle = color;
+    ctx.lineWidth = Math.max(1, s * 0.04);
+    ctx.beginPath();
+    ctx.ellipse(0, by, s * 0.4, s * 0.14, 0, 0, Math.PI * 2);
     ctx.stroke();
   }
-
-  const by = ty - s * 0.44;
-  ctx.beginPath();
-  ctx.arc(0, by, s * 0.5, 0, Math.PI * 2);
-  ctx.fillStyle = `rgba(179,102,255,${0.18 + 0.1 * Math.sin(time * 5 + seed)})`;
-  ctx.fill();
-  ctx.beginPath();
-  ctx.arc(0, by, s * 0.3, 0, Math.PI * 2);
-  paint(ctx, lighten(color, 0.35), s * 0.34);
-  ink(ctx, s, 0.7);
-
-  // arcs spark from the ball to the ring right after firing
-  if (t.recoil > 0.05) {
-    const zt = Math.floor(time * 18) * 1.37;
-    zigZap(ctx, 0, by, -s * 0.55, ty, s, zt);
-    zigZap(ctx, 0, by, s * 0.55, ty, s, zt + 9.1);
-  }
-
-  eyes(ctx, s * 0.3, look, { ratio: 0.3, gap: 0.34, cy: -0.05, blink });
+  ctx.restore();
+  ctx.restore();
 }
 
+// Rail Cannon: long-range piercing sniper — capacitor bank charges, twin guide
+// rails with a slug track, sensor slit-scope; lance flash and hard recoil.
 function railArt(ctx, t, s, time, bob) {
   const color = t.def.color;
   const seed = t.col * 7.13 + t.row * 3.71;
-  const blink = ((time * 0.55 + seed) % 3.6) < 0.13;
-  const look = { x: Math.cos(t.angle), y: Math.sin(t.angle) };
-
-  // gantry legs + long angular platform
-  for (const side of [-1, 1]) {
-    rr(ctx, side * s * 0.62 - s * 0.17, s * 0.72 + bob, s * 0.34, s * 0.4, s * 0.12);
-    ctx.fillStyle = darken(color, 0.4);
+  const charge = 0.5 + 0.5 * Math.sin(time * 1.5 + seed);
+  const heat = t.recoil;
+  const edge = 'rgba(8,12,22,0.9)';
+  techPad(ctx, s, color, bob, charge);
+  // recoil dampers anchored on the pad
+  for (const dy of [-0.3, 0.3]) {
+    chamferPath(ctx, [[-s * 0.66, s * dy - s * 0.08], [-s * 0.2, s * dy - s * 0.05], [-s * 0.2, s * dy + s * 0.05], [-s * 0.66, s * dy + s * 0.08]]);
+    ctx.fillStyle = '#232c44';
     ctx.fill();
-    ink(ctx, s, 0.6);
+    ctx.strokeStyle = edge;
+    ctx.lineWidth = Math.max(1, s * 0.04);
+    ctx.stroke();
   }
-  roundPoly(ctx, [P(-s, s * 0.78), P(s, s * 0.78), P(s * 0.7, s * 0.04), P(-s * 0.7, s * 0.04)], 0.28);
-  paint(ctx, color, s * 1.1);
-  ink(ctx, s);
-  emblem(ctx, t, s, s * 0.48 + bob);
 
-  // very long rail barrel: guide rails + glowing charge strip, slides on recoil
   ctx.save();
-  ctx.translate(0, -s * 0.3 + bob);
-  ctx.rotate(t.angle + Math.PI / 2);
-  const rec = t.recoil * s * 0.3;
-  for (const off of [-s * 0.34, s * 0.34]) {
-    rr(ctx, off - s * 0.07, -s * 1.42 + rec, s * 0.14, s * 1.42, s * 0.07);
-    ctx.fillStyle = darken(color, 0.4);
+  ctx.translate(0, -s * 0.14 + bob);
+  ctx.rotate(t.angle);
+  ctx.translate(-s * 0.38 * heat, 0);
+
+  // capacitor bank behind the breech
+  const banks = t.level >= 3 ? [-0.78, -1.08] : [-0.82];
+  for (const bx of banks) {
+    chamferPath(ctx, [[s * bx - s * 0.16, -s * 0.3], [s * bx + s * 0.16, -s * 0.24], [s * bx + s * 0.16, s * 0.24], [s * bx - s * 0.16, s * 0.3]]);
+    ctx.fillStyle = metalGrad(ctx, s, -0.3, 0.3, '#4a5878', '#232c44', '#131a2b');
     ctx.fill();
-    ink(ctx, s, 0.55);
+    ctx.strokeStyle = edge;
+    ctx.lineWidth = Math.max(1, s * 0.045);
+    ctx.stroke();
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    for (let i = 0; i < 3; i++) {
+      ctx.fillStyle = color;
+      ctx.globalAlpha = charge > (i + 1) / 3.4 ? 0.9 : 0.12;
+      ctx.fillRect(s * bx - s * 0.05, -s * 0.22 + i * s * 0.17, s * 0.1, s * 0.08);
+    }
+    ctx.restore();
   }
-  rr(ctx, -s * 0.18, -s * 1.78 + rec, s * 0.36, s * 1.72, s * 0.14);
-  ctx.fillStyle = darken(color, 0.12);
+
+  // breech housing
+  chamferPath(ctx, [[-s * 0.62, -s * 0.26], [s * 0.3, -s * 0.34], [s * 0.44, 0], [s * 0.3, s * 0.34], [-s * 0.62, s * 0.26]]);
+  ctx.fillStyle = metalGrad(ctx, s, -0.34, 0.34);
   ctx.fill();
-  ink(ctx, s, 0.8);
-  ctx.globalAlpha = 0.4 + 0.6 * Math.abs(Math.sin(time * 6 + seed));
-  rr(ctx, -s * 0.05, -s * 1.68 + rec, s * 0.1, s * 1.5, s * 0.05);
-  ctx.fillStyle = lighten(color, 0.7);
+  ctx.strokeStyle = edge;
+  ctx.lineWidth = Math.max(1, s * 0.05);
+  ctx.stroke();
+
+  // twin guide rails + slug track
+  const len = t.level >= 3 ? 1.9 : 1.62;
+  for (const ry of [-s * 0.24, s * 0.24]) {
+    chamferPath(ctx, [[s * 0.2, ry - s * 0.09], [s * len, ry - s * 0.05], [s * (len + 0.08), ry], [s * len, ry + s * 0.05], [s * 0.2, ry + s * 0.09]]);
+    ctx.fillStyle = '#39445f';
+    ctx.fill();
+    ctx.strokeStyle = edge;
+    ctx.lineWidth = Math.max(1, s * 0.04);
+    ctx.stroke();
+  }
+  chamferPath(ctx, [[s * 0.2, -s * 0.1], [s * (len - 0.05), -s * 0.05], [s * (len - 0.05), s * 0.05], [s * 0.2, s * 0.1]]);
+  ctx.fillStyle = '#101625';
   ctx.fill();
-  ctx.globalAlpha = 1;
-  // muzzle brake
-  roundPoly(ctx, [P(0, -s * 1.95 + rec), P(s * 0.2, -s * 1.75 + rec), P(0, -s * 1.55 + rec), P(-s * 0.2, -s * 1.75 + rec)], 0.3);
-  ctx.fillStyle = lighten(color, 0.3);
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  ctx.fillStyle = color;
+  ctx.globalAlpha = 0.25 + 0.6 * heat + 0.15 * charge;
+  ctx.fillRect(s * 0.3, -Math.max(1, s * 0.02), s * (len - 0.45), s * 0.04);
+  ctx.restore();
+  // accelerator coils across the rails
+  const coils = t.level >= 2 ? 4 : 3;
+  for (let i = 0; i < coils; i++) {
+    const cx = s * (0.42 + (i * (len - 0.7)) / (coils - 1));
+    chamferPath(ctx, [[cx - s * 0.07, -s * 0.3], [cx + s * 0.07, -s * 0.28], [cx + s * 0.07, s * 0.28], [cx - s * 0.07, s * 0.3]]);
+    ctx.fillStyle = '#1b2236';
+    ctx.fill();
+    ctx.strokeStyle = edge;
+    ctx.lineWidth = Math.max(1, s * 0.035);
+    ctx.stroke();
+  }
+
+  // muzzle: rail prongs with inter-tip glow
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  const mg = ctx.createRadialGradient(s * (len + 0.08), 0, 0, s * (len + 0.08), 0, s * (0.2 + 0.5 * heat));
+  mg.addColorStop(0, `rgba(255,246,180,${0.5 + 0.5 * heat})`);
+  mg.addColorStop(1, 'rgba(255,230,0,0)');
+  ctx.fillStyle = mg;
+  ctx.beginPath();
+  ctx.arc(s * (len + 0.08), 0, s * (0.2 + 0.5 * heat), 0, Math.PI * 2);
   ctx.fill();
-  ink(ctx, s, 0.7);
-  if (t.recoil > 0.5) muzzleFlash(ctx, s, 0, -s * 1.95 + rec, 0.5);
+  if (heat > 0.35) {
+    // hyper-velocity slug lance
+    const lg = ctx.createLinearGradient(s * len, 0, s * (len + 1.4 * heat), 0);
+    lg.addColorStop(0, `rgba(255,255,255,${heat})`);
+    lg.addColorStop(1, 'rgba(255,230,0,0)');
+    ctx.fillStyle = lg;
+    ctx.fillRect(s * len, -s * 0.05 * heat, s * 1.4 * heat, s * 0.1 * heat);
+  }
   ctx.restore();
 
-  // boxy scope head
-  rr(ctx, -s * 0.52, -s * 0.86 + bob, s * 1.04, s * 1.0, s * 0.32);
-  paint(ctx, color, s * 0.85);
-  ink(ctx, s);
-  gloss(ctx, s * 0.7, 0.5);
-  eyes(ctx, s * 0.7, look, { ratio: 0.26, gap: 0.38, cy: -0.15, angry: true, blink });
+  // sensor scope: angular housing with a thin glowing slit lens
+  chamferPath(ctx, [[-s * 0.42, -s * 0.62], [s * 0.1, -s * 0.56], [s * 0.24, -s * 0.42], [-s * 0.42, -s * 0.4]]);
+  ctx.fillStyle = '#2c3752';
+  ctx.fill();
+  ctx.strokeStyle = edge;
+  ctx.lineWidth = Math.max(1, s * 0.045);
+  ctx.stroke();
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  ctx.fillStyle = color;
+  ctx.globalAlpha = 0.75 + 0.25 * charge;
+  ctx.shadowColor = color;
+  ctx.shadowBlur = s * 0.4;
+  ctx.fillRect(-s * 0.3, -s * 0.56, s * 0.42, Math.max(1, s * 0.05));
+  if (t.level >= 3) {
+    // laser designator blade over the barrel
+    ctx.globalAlpha = 0.5 + 0.4 * heat;
+    ctx.fillRect(s * 0.42, -s * 0.5, s * (len - 0.4), Math.max(1, s * 0.04));
+  }
+  ctx.restore();
+  ctx.restore();
 }
+
 
 const TOWER_ART = { pulse: pulseArt, cryo: cryoArt, arc: arcArt, rail: railArt };
 
