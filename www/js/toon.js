@@ -408,40 +408,241 @@ function zigZap(ctx, x0, y0, x1, y1, s, seedT) {
   ctx.restore();
 }
 
+// Pulse turret: hard-surface plasma emitter — octagonal tech pad, angular
+// gunmetal turret, dual plasma rails with a charged core orb. No face, no ink.
+function bolt(ctx, x, y, r) {
+  ctx.beginPath();
+  ctx.arc(x, y, r, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+function chamferPath(ctx, pts) {
+  ctx.beginPath();
+  pts.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
+  ctx.closePath();
+}
+
 function pulseArt(ctx, t, s, time, bob) {
   const color = t.def.color;
   const seed = t.col * 7.13 + t.row * 3.71;
-  const blink = ((time * 0.55 + seed) % 3.6) < 0.13;
-  const look = { x: Math.cos(t.angle), y: Math.sin(t.angle) };
+  const idle = 0.5 + 0.5 * Math.sin(time * 2.2 + seed);
+  const heat = t.recoil;
+  const edge = 'rgba(8,12,22,0.9)';
 
-  // round base plate
-  ctx.beginPath();
-  ctx.arc(0, s * 0.38 + bob, s * 0.95, 0, Math.PI * 2);
-  paint(ctx, color, s * 1.15);
-  ink(ctx, s);
-  emblem(ctx, t, s, s * 0.58 + bob);
-
-  // twin gatling barrels that train on the aim and kick on fire
+  // --- static octagonal tech pad with emissive rim ---
   ctx.save();
-  ctx.translate(0, -s * 0.42 + bob);
-  ctx.rotate(t.angle + Math.PI / 2);
-  const rec = t.recoil * s * 0.22;
-  for (const off of [-s * 0.24, s * 0.24]) {
-    rr(ctx, off - s * 0.11, -s * 1.3 + rec, s * 0.22, s * 1.0, s * 0.1);
-    ctx.fillStyle = darken(color, 0.3);
-    ctx.fill();
-    ink(ctx, s, 0.8);
-  }
-  if (t.recoil > 0.4) muzzleFlash(ctx, s, 0, -s * 1.4 + rec, 0.34);
+  ctx.translate(0, s * 0.42 + bob);
+  const oct = (r) => {
+    ctx.beginPath();
+    for (let i = 0; i < 8; i++) {
+      const a = (Math.PI / 4) * i + Math.PI / 8;
+      const x = Math.cos(a) * r * 1.06;
+      const y = Math.sin(a) * r * 0.72;
+      i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+    }
+    ctx.closePath();
+  };
+  oct(s * 0.95);
+  const pad = ctx.createLinearGradient(0, -s * 0.72, 0, s * 0.72);
+  pad.addColorStop(0, '#39445f');
+  pad.addColorStop(0.5, '#232c44');
+  pad.addColorStop(1, '#141a2c');
+  ctx.fillStyle = pad;
+  ctx.fill();
+  ctx.strokeStyle = edge;
+  ctx.lineWidth = Math.max(1, s * 0.06);
+  ctx.stroke();
+  ctx.save();
+  oct(s * 0.76);
+  ctx.strokeStyle = color;
+  ctx.globalAlpha = 0.3 + 0.3 * idle;
+  ctx.shadowColor = color;
+  ctx.shadowBlur = s * 0.45;
+  ctx.lineWidth = Math.max(1, s * 0.05);
+  ctx.stroke();
+  ctx.restore();
+  ctx.fillStyle = '#55627f';
+  for (const bx of [-0.74, 0.74]) for (const by of [-0.26, 0.3]) bolt(ctx, s * bx, s * by, s * 0.07);
+  ctx.strokeStyle = 'rgba(10,14,26,0.55)';
+  ctx.lineWidth = Math.max(1, s * 0.03);
+  ctx.beginPath();
+  ctx.moveTo(-s * 0.42, -s * 0.5);
+  ctx.lineTo(-s * 0.42, s * 0.5);
+  ctx.moveTo(s * 0.42, -s * 0.5);
+  ctx.lineTo(s * 0.42, s * 0.5);
+  ctx.stroke();
   ctx.restore();
 
-  // domed head; eyes stay upright and track the target
+  // --- rotating turret, recoil slides along the aim axis ---
+  ctx.save();
+  ctx.translate(0, -s * 0.3 + bob);
+  ctx.rotate(t.angle);
+  ctx.translate(-s * 0.2 * heat, 0);
+
+  // dual plasma rails
+  const railG = ctx.createLinearGradient(0, -s * 0.42, 0, s * 0.42);
+  railG.addColorStop(0, '#4a5878');
+  railG.addColorStop(0.5, '#2b3550');
+  railG.addColorStop(1, '#171d30');
+  for (const ry of [-s * 0.3, s * 0.3]) {
+    chamferPath(ctx, [[s * 0.1, ry - s * 0.12], [s * 1.32, ry - s * 0.08], [s * 1.4, ry], [s * 1.32, ry + s * 0.08], [s * 0.1, ry + s * 0.12]]);
+    ctx.fillStyle = railG;
+    ctx.fill();
+    ctx.strokeStyle = edge;
+    ctx.lineWidth = Math.max(1, s * 0.045);
+    ctx.stroke();
+    // energy conduit along each rail
+    ctx.save();
+    ctx.strokeStyle = color;
+    ctx.globalAlpha = 0.5 + 0.4 * heat;
+    ctx.shadowColor = color;
+    ctx.shadowBlur = s * 0.3;
+    ctx.lineWidth = Math.max(1, s * 0.045);
+    ctx.beginPath();
+    ctx.moveTo(s * 0.3, ry);
+    ctx.lineTo(s * 1.26, ry);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  // charge coils bridging the rails
+  for (const cx of [s * 0.42, s * 0.78, s * 1.14]) {
+    chamferPath(ctx, [[cx - s * 0.07, -s * 0.34], [cx + s * 0.07, -s * 0.34], [cx + s * 0.05, s * 0.34], [cx - s * 0.05, s * 0.34]]);
+    ctx.fillStyle = '#1b2236';
+    ctx.fill();
+    ctx.strokeStyle = edge;
+    ctx.lineWidth = Math.max(1, s * 0.04);
+    ctx.stroke();
+    ctx.save();
+    ctx.strokeStyle = color;
+    ctx.globalAlpha = 0.35 + 0.45 * idle * (1 - heat) + heat;
+    ctx.lineWidth = Math.max(1, s * 0.05);
+    ctx.beginPath();
+    ctx.moveTo(cx, -s * 0.27);
+    ctx.lineTo(cx, s * 0.27);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  // plasma core orb between the rail tips
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  const orb = s * (0.24 + 0.07 * idle + 0.3 * heat);
+  const og = ctx.createRadialGradient(s * 1.34, 0, 0, s * 1.34, 0, orb);
+  og.addColorStop(0, 'rgba(255,255,255,0.95)');
+  og.addColorStop(0.35, color);
+  og.addColorStop(1, 'rgba(0,229,255,0)');
+  ctx.fillStyle = og;
   ctx.beginPath();
-  ctx.arc(0, -s * 0.42 + bob, s * 0.62, 0, Math.PI * 2);
-  paint(ctx, color, s * 0.62);
-  ink(ctx, s);
-  gloss(ctx, s * 0.62, 0.5);
-  eyes(ctx, s * 0.62, look, { ratio: 0.28, gap: 0.38, cy: -0.15, blink });
+  ctx.arc(s * 1.34, 0, orb, 0, Math.PI * 2);
+  ctx.fill();
+  // arcing between the rail tips
+  const arcA = heat > 0.15 ? heat : idle > 0.86 ? 0.5 : 0;
+  if (arcA > 0) {
+    ctx.globalAlpha = Math.min(1, arcA + 0.2);
+    ctx.strokeStyle = '#e9fbff';
+    ctx.lineWidth = Math.max(1, s * 0.06);
+    ctx.lineCap = 'round';
+    const q = Math.floor(time * 14);
+    ctx.beginPath();
+    ctx.moveTo(s * 1.3, -s * 0.29);
+    for (let i = 1; i <= 3; i++) {
+      ctx.lineTo(s * 1.3 + (jit(seed + q + i) - 0.5) * s * 0.3,
+        -s * 0.29 + (s * 0.58 * i) / 3 + (jit(seed - q + i * 5.2) - 0.5) * s * 0.16);
+    }
+    ctx.stroke();
+  }
+  if (heat > 0.3) {
+    // muzzle flare + shockwave ring on fire
+    const len = s * (0.4 + 0.7 * heat);
+    const fg = ctx.createRadialGradient(s * 1.45, 0, 0, s * 1.45, 0, len);
+    fg.addColorStop(0, `rgba(255,255,255,${0.9 * heat})`);
+    fg.addColorStop(0.4, `rgba(140,240,255,${0.55 * heat})`);
+    fg.addColorStop(1, 'rgba(0,229,255,0)');
+    ctx.fillStyle = fg;
+    ctx.beginPath();
+    ctx.arc(s * 1.45, 0, len, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.globalAlpha = heat * 0.8;
+    ctx.strokeStyle = '#bff4ff';
+    ctx.lineWidth = Math.max(1, s * 0.07 * heat);
+    ctx.beginPath();
+    ctx.arc(s * 1.45, 0, s * (0.2 + (1 - heat) * 0.6), 0, Math.PI * 2);
+    ctx.stroke();
+  }
+  ctx.restore();
+
+  // angular turret housing (drawn last so it laps the rail roots)
+  chamferPath(ctx, [
+    [-s * 0.62, -s * 0.3], [s * 0.16, -s * 0.44], [s * 0.5, -s * 0.2],
+    [s * 0.5, s * 0.2], [s * 0.16, s * 0.44], [-s * 0.62, s * 0.3],
+  ]);
+  const body = ctx.createLinearGradient(0, -s * 0.44, 0, s * 0.44);
+  body.addColorStop(0, '#57668a');
+  body.addColorStop(0.42, '#2c3752');
+  body.addColorStop(1, '#151b2c');
+  ctx.fillStyle = body;
+  ctx.fill();
+  ctx.strokeStyle = edge;
+  ctx.lineWidth = Math.max(1, s * 0.05);
+  ctx.stroke();
+  // specular ridge + cyan trim
+  ctx.strokeStyle = 'rgba(255,255,255,0.35)';
+  ctx.lineWidth = Math.max(1, s * 0.045);
+  ctx.beginPath();
+  ctx.moveTo(-s * 0.5, -s * 0.24);
+  ctx.lineTo(s * 0.12, -s * 0.36);
+  ctx.stroke();
+  ctx.save();
+  ctx.strokeStyle = color;
+  ctx.globalAlpha = 0.65 + 0.35 * heat;
+  ctx.shadowColor = color;
+  ctx.shadowBlur = s * 0.3;
+  ctx.lineWidth = Math.max(1, s * 0.05);
+  ctx.beginPath();
+  ctx.moveTo(-s * 0.44, -s * 0.12);
+  ctx.lineTo(s * 0.1, -s * 0.24);
+  ctx.lineTo(s * 0.3, -s * 0.14);
+  ctx.stroke();
+  ctx.restore();
+
+  // rear exhaust: flickers hot right after a shot
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  ctx.fillStyle = color;
+  ctx.globalAlpha = 0.25 + 0.6 * heat + 0.15 * idle;
+  for (const ey of [-s * 0.16, s * 0.16]) {
+    chamferPath(ctx, [[-s * 0.6, ey - s * 0.05], [-s * 0.44, ey - s * 0.05], [-s * 0.4, ey], [-s * 0.44, ey + s * 0.05], [-s * 0.6, ey + s * 0.05]]);
+    ctx.fill();
+  }
+  ctx.restore();
+
+  // level extras: Lv2 side pods, Lv3 top stabiliser blade
+  if (t.level >= 2) {
+    for (const py of [-s * 0.56, s * 0.56]) {
+      chamferPath(ctx, [[-s * 0.3, py - s * 0.14], [s * 0.04, py - s * 0.12], [s * 0.04, py + s * 0.12], [-s * 0.3, py + s * 0.14]]);
+      ctx.fillStyle = '#232c44';
+      ctx.fill();
+      ctx.strokeStyle = edge;
+      ctx.lineWidth = Math.max(1, s * 0.04);
+      ctx.stroke();
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.fillStyle = color;
+      ctx.globalAlpha = 0.6 + 0.4 * idle;
+      bolt(ctx, -s * 0.12, py, s * 0.06);
+      ctx.restore();
+    }
+  }
+  if (t.level >= 3) {
+    chamferPath(ctx, [[-s * 0.3, -s * 0.72], [s * 0.02, -s * 0.6], [s * 0.02, -s * 0.46], [-s * 0.3, -s * 0.5]]);
+    ctx.fillStyle = '#2c3752';
+    ctx.fill();
+    ctx.strokeStyle = edge;
+    ctx.lineWidth = Math.max(1, s * 0.04);
+    ctx.stroke();
+  }
+  ctx.restore();
 }
 
 function cryoArt(ctx, t, s, time, bob) {
