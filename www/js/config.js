@@ -118,8 +118,8 @@ export const ENEMIES = {
     regen: 4, phaseEvery: 3.2, phaseTime: 0.7, // brief untargetable blink
   },
   boss: {
-    key: 'boss', name: 'GRID REAPER', hp: 950, speed: 0.72, reward: 70, coreDmg: 5,
-    color: PALETTE.danger, size: 0.46, shape: 'boss', armor: 4, slowResist: 0.65,
+    key: 'boss', name: 'GRID REAPER', hp: 650, speed: 0.72, reward: 70, coreDmg: 5,
+    color: PALETTE.danger, size: 0.46, shape: 'boss', armor: 4, slowResist: 0.5,
     boss: true,
   },
 };
