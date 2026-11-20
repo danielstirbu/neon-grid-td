@@ -3,9 +3,52 @@
 export const GRID = {
   cols: 9,
   rows: 14,
-  spawn: { col: 4, row: 0 },
+  spawn: { col: 0, row: 0 },
   core: { col: 4, row: 13 },
 };
+
+// Serpentine lane: corner waypoints from spawn (top-left) to core (bottom).
+// Consecutive waypoints that differ on both axes expand into 45-degree
+// staircases, so the lane reads as a diagonal S while staying grid-adjacent.
+export const PATH_WAYPOINTS = [
+  { col: 0, row: 0 },
+  { col: 7, row: 2 },
+  { col: 7, row: 4 },
+  { col: 1, row: 6 },
+  { col: 1, row: 8 },
+  { col: 7, row: 10 },
+  { col: 7, row: 12 },
+  { col: 4, row: 13 },
+];
+
+// Ordered lane cells (spawn -> core). Only these cells are walkable; every
+// other cell is a build platform. Mixed-axis legs expand into staircases with
+// Bresenham-style even interleaving so they read as smooth 45° diagonals.
+export function buildRoad(waypoints = PATH_WAYPOINTS) {
+  const cells = [{ ...waypoints[0] }];
+  for (let i = 0; i < waypoints.length - 1; i++) {
+    const from = waypoints[i];
+    const to = waypoints[i + 1];
+    const dc = Math.sign(to.col - from.col);
+    const dr = Math.sign(to.row - from.row);
+    const dist = Math.abs(to.col - from.col) + Math.abs(to.row - from.row);
+    let { col, row } = from;
+    let doneC = 0;
+    for (let s = 1; s <= dist; s++) {
+      const wantC = Math.round((s * Math.abs(to.col - from.col)) / dist);
+      if (wantC > doneC) {
+        col += dc;
+        doneC = wantC;
+      } else {
+        row += dr;
+      }
+      cells.push({ col, row });
+    }
+  }
+  return cells;
+}
+
+export const ROAD = buildRoad();
 
 export const PALETTE = {
   bg: '#05060f',

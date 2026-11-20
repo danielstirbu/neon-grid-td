@@ -281,7 +281,8 @@ class Game {
         for (const [dx, dy] of dirs) {
           const nx = cx + dx;
           const ny = cy + dy;
-          if (!path.inBounds(nx, ny) || path.isBlocked(nx, ny)) continue;
+          // Escape walks along the lane only — platforms are never walkable.
+          if (!path.inBounds(nx, ny) || !path.isRoad(nx, ny) || path.isBlocked(nx, ny)) continue;
           const ni = path.idx(nx, ny);
           if (seen.has(ni)) continue;
           seen.add(ni);
@@ -341,7 +342,7 @@ class Game {
     }
     if (!this.path.canPlace(col, row)) {
       audio.play('deny');
-      this.ui.toast(this.path.isBlocked(col, row) ? 'CELL OCCUPIED' : 'PATH MUST STAY OPEN');
+      this.ui.toast(this.path.isBlocked(col, row) ? 'CELL OCCUPIED' : 'THE LANE IS NOT BUILDABLE');
       this.ui.vibrate(30);
       return false;
     }

@@ -1,5 +1,10 @@
-// pathfinding.js — dynamic BFS flow-field from the core + placement anti-blockade.
-// Grid cells: 0 = open, 1 = blocked (tower). Spawn/core cells are always open.
+// pathfinding.js — fixed serpentine lane: BFS flow-field restricted to the road
+// + placement rules. Grid cells: off-road = platform (never walkable), road =
+// lane. Towers may only occupy platforms, so the lane can never be blocked:
+// the L-01 (no enemy isolated from the core) and L-02 (no stuck/teleported
+// enemy) invariants hold by construction, and the checks are kept as guards.
+
+import { ROAD } from './config.js';
 
 export class Pathfinder {
   constructor(cols, rows, spawn, core) {
@@ -7,7 +12,11 @@ export class Pathfinder {
     this.rows = rows;
     this.spawn = spawn;
     this.core = core;
-    this.blocked = new Uint8Array(cols * rows);
+    this.road = new Uint8Array(cols * rows);
+    for (const { col, row } of ROAD) {
+      if (col >= 0 && col < cols && row >= 0 && row < rows) this.road[this.idx(col, row)] = 1;
+    }
+    this.blocked = new Uint8Array(cols * rows); // towers on platforms
     this.dist = new Int32Array(cols * rows);
     this.recompute();
   }
@@ -24,66 +33,50 @@ export class Pathfinder {
     return this.blocked[this.idx(col, row)] === 1;
   }
 
-  isSpawnOrCore(col, row) {
-    return (col === this.spawn.col && row === this.spawn.row) ||
-           (col === this.core.col && row === this.core.row);
+  isRoad(col, row) {
+    if (!this.inBounds(col, row)) return false;
+    return this.road[this.idx(col, row)] === 1;
   }
 
-  // Can a tower legally occupy this cell?
+  // Can a tower legally occupy this cell? Platforms only — the lane stays open.
   canPlace(col, row) {
     if (!this.inBounds(col, row)) return false;
-    if (this.isSpawnOrCore(col, row)) return false;
-    if (this.isBlocked(col, row)) return false;
-    // Tentatively block and ensure the core stays reachable from spawn.
-    const i = this.idx(col, row);
-    this.blocked[i] = 1;
-    const ok = this._reachabilityOk();
-    this.blocked[i] = 0;
-    return ok;
+    if (this.isRoad(col, row)) return false;
+    return !this.isBlocked(col, row);
   }
 
   place(col, row) {
     this.blocked[this.idx(col, row)] = 1;
-    this.recompute();
+    // dist never changes now (towers are off-road), but keep the call cheap
+    // and the API identical for callers.
   }
 
   remove(col, row) {
     this.blocked[this.idx(col, row)] = 0;
-    this.recompute();
   }
 
-  _reachabilityOk() {
-    // Cheap BFS from spawn toward core with early exit.
-    const { cols, rows, blocked } = this;
-    const seen = new Uint8Array(cols * rows);
-    const queue = [this.idx(this.spawn.col, this.spawn.row)];
-    seen[queue[0]] = 1;
-    const goal = this.idx(this.core.col, this.core.row);
-    let head = 0;
-    while (head < queue.length) {
-      const cur = queue[head++];
-      if (cur === goal) return true;
-      const cx = cur % cols;
-      const cy = (cur / cols) | 0;
-      for (let d = 0; d < 4; d++) {
-        const nx = cx + (d === 0 ? 1 : d === 1 ? -1 : 0);
-        const ny = cy + (d === 2 ? 1 : d === 3 ? -1 : 0);
-        if (nx < 0 || ny < 0 || nx >= cols || ny >= rows) continue;
-        const ni = ny * cols + nx;
-        if (seen[ni] || blocked[ni]) continue;
-        seen[ni] = 1;
-        queue.push(ni);
-      }
-    }
-    return false;
-  }
-
-  // BFS distance field from the core; enemies follow steepest descent.
+  // BFS distance field over road cells only, seeded from the core. If the core
+  // cell is off-road, every road cell adjacent to it seeds at distance 0.
   recompute() {
-    const { cols, rows, blocked, dist } = this;
+    const { cols, rows, road, dist } = this;
     dist.fill(-1);
-    const queue = [this.idx(this.core.col, this.core.row)];
-    dist[queue[0]] = 0;
+    const queue = [];
+    const seed = (col, row) => {
+      if (!this.inBounds(col, row)) return;
+      const i = this.idx(col, row);
+      if (road[i] && dist[i] === -1) {
+        dist[i] = 0;
+        queue.push(i);
+      }
+    };
+    if (road[this.idx(this.core.col, this.core.row)]) {
+      seed(this.core.col, this.core.row);
+    } else {
+      seed(this.core.col - 1, this.core.row);
+      seed(this.core.col + 1, this.core.row);
+      seed(this.core.col, this.core.row - 1);
+      seed(this.core.col, this.core.row + 1);
+    }
     let head = 0;
     while (head < queue.length) {
       const cur = queue[head++];
@@ -95,7 +88,7 @@ export class Pathfinder {
         const ny = cy + (d === 2 ? 1 : d === 3 ? -1 : 0);
         if (nx < 0 || ny < 0 || nx >= cols || ny >= rows) continue;
         const ni = ny * cols + nx;
-        if (dist[ni] !== -1 || blocked[ni]) continue;
+        if (dist[ni] !== -1 || !road[ni]) continue;
         dist[ni] = nd;
         queue.push(ni);
       }
@@ -110,7 +103,10 @@ export class Pathfinder {
   // True when a live path from this cell to the core still exists (L-01).
   isReachableFromCore(col, row) {
     if (!this.inBounds(col, row)) return false;
-    return this.dist[this.idx(col, row)] >= 0;
+    if (col === this.core.col && row === this.core.row) return true;
+    if (this.isRoad(col, row)) return this.dist[this.idx(col, row)] >= 0;
+    // Platforms are not walkable; an enemy that ended up on one must escape.
+    return false;
   }
 
   // Unit-space next waypoint toward the core from a float position.

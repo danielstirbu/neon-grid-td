@@ -1,6 +1,6 @@
 // renderer.js — Canvas 2D at native DPR: meadow backdrop, grid, towers, enemies, projectiles, beams, VFX.
 // Characters are drawn with the toon.js cartoon helpers; projectiles/beams/particles stay neon.
-import { GRID, PALETTE } from './config.js';
+import { GRID, PALETTE, ROAD } from './config.js';
 import { drawToonEnemy, drawToonTower, toonText, clearGradCache } from './toon.js';
 import { Landscape } from './landscape.js';
 
@@ -41,6 +41,7 @@ export class Renderer {
     this.landscape = new Landscape();
     this.glowSprites = new Map();
     for (const color of GLOW_COLORS) this.glowSprites.set(color, makeGlowSprite(color));
+    this.board = null; // pre-rendered panel + lane + platforms (P-03/P-06 safe)
     this.resize();
   }
 
@@ -72,7 +73,76 @@ export class Renderer {
       w: this.cell * GRID.cols,
       h: this.cell * GRID.rows,
     });
+    this._buildBoard();
     clearGradCache(); // P-03: toon gradients are keyed by cell size s; drop stale entries
+  }
+
+  // Pre-render panel, platforms and the neon lane once per resize; per frame it
+  // is a single drawImage (no per-frame gradients — P-03 — and no shadowBlur — P-06).
+  _buildBoard() {
+    const { cell, dpr } = this;
+    const w = cell * GRID.cols;
+    const h = cell * GRID.rows;
+    if (!w || !h) return;
+    if (!this.board) this.board = document.createElement('canvas');
+    this.board.width = Math.round(w * dpr);
+    this.board.height = Math.round(h * dpr);
+    const g = this.board.getContext('2d');
+    g.setTransform(dpr, 0, 0, dpr, 0, 0);
+    g.clearRect(0, 0, w, h);
+
+    // Translucent panel so the backdrop shows through while cells stay legible.
+    g.fillStyle = 'rgba(10,26,18,0.4)';
+    g.fillRect(0, 0, w, h);
+
+    const road = new Set(ROAD.map(({ col, row }) => row * GRID.cols + col));
+
+    // Build platforms: raised tiles with corner studs, inset from the lane.
+    for (let row = 0; row < GRID.rows; row++) {
+      for (let col = 0; col < GRID.cols; col++) {
+        if (road.has(row * GRID.cols + col)) continue;
+        const x = col * cell;
+        const y = row * cell;
+        const p = Math.max(2, cell * 0.11);
+        g.fillStyle = 'rgba(27,42,107,0.5)';
+        g.fillRect(x + p, y + p, cell - p * 2, cell - p * 2);
+        g.strokeStyle = 'rgba(0,229,255,0.28)';
+        g.lineWidth = 1;
+        g.strokeRect(x + p + 0.5, y + p + 0.5, cell - p * 2 - 1, cell - p * 2 - 1);
+        g.fillStyle = 'rgba(0,229,255,0.5)';
+        const s = Math.max(1.5, cell * 0.06);
+        g.fillRect(x + p, y + p, s, s);
+        g.fillRect(x + cell - p - s, y + p, s, s);
+        g.fillRect(x + p, y + cell - p - s, s, s);
+        g.fillRect(x + cell - p - s, y + cell - p - s, s, s);
+      }
+    }
+
+    // Lane: wide dark stroke (mitered joints keep corners crisp), then the
+    // neon edge and the dashed direction line follow the same polyline.
+    const pts = ROAD.map(({ col, row }) => ({ x: (col + 0.5) * cell, y: (row + 0.5) * cell }));
+    g.lineJoin = 'round';
+    g.lineCap = 'round';
+    const lane = (width, stroke, dash, offset) => {
+      g.lineWidth = width;
+      g.strokeStyle = stroke;
+      g.setLineDash(dash || []);
+      g.lineDashOffset = offset || 0;
+      g.beginPath();
+      pts.forEach((pt, i) => (i === 0 ? g.moveTo(pt.x, pt.y) : g.lineTo(pt.x, pt.y)));
+      g.stroke();
+    };
+    // Widest first: cyan rim, then the dark fill on top leaves a neon border;
+    // the dashed centerline shows the travel direction.
+    lane(cell * 0.94, 'rgba(0,229,255,0.45)');
+    lane(cell * 0.78, '#081221');
+    lane(Math.max(1.5, cell * 0.09), 'rgba(0,229,255,0.75)', [cell * 0.42, cell * 0.5]);
+    g.setLineDash([]);
+
+    // Panel frame on top of everything.
+    g.strokeStyle = 'rgba(255,255,255,0.28)';
+    g.lineWidth = 2;
+    g.strokeRect(1, 1, w - 2, h - 2);
   }
 
   // Screen CSS px -> grid float coords
@@ -93,28 +163,9 @@ export class Renderer {
 
   drawGrid(hover) {
     const { ctx, cell } = this;
-    const w = cell * GRID.cols;
-    const h = cell * GRID.rows;
     ctx.save();
-    // Translucent panel so the meadow shows through while cells stay legible.
-    ctx.fillStyle = 'rgba(10,26,18,0.4)';
-    ctx.fillRect(this.ox, this.oy, w, h);
-    ctx.strokeStyle = 'rgba(255,255,255,0.28)';
-    ctx.lineWidth = 2;
-    ctx.strokeRect(this.ox + 1, this.oy + 1, w - 2, h - 2);
-
-    ctx.strokeStyle = 'rgba(255,255,255,0.16)';
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    for (let c = 0; c <= GRID.cols; c++) {
-      ctx.moveTo(this.ox + c * cell + 0.5, this.oy);
-      ctx.lineTo(this.ox + c * cell + 0.5, this.oy + h);
-    }
-    for (let r = 0; r <= GRID.rows; r++) {
-      ctx.moveTo(this.ox, this.oy + r * cell + 0.5);
-      ctx.lineTo(this.ox + w, this.oy + r * cell + 0.5);
-    }
-    ctx.stroke();
+    // Panel + platforms + lane were baked into this.board on resize.
+    if (this.board) ctx.drawImage(this.board, this.ox, this.oy, cell * GRID.cols, cell * GRID.rows);
 
     // Spawn & core markers
     this._marker(GRID.spawn, PALETTE.magenta, 'SPAWN');
