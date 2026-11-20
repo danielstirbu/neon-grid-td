@@ -32,6 +32,7 @@ gardă `e.repeat` / focus în input pe `keydown`).
 |---|---|---|
 | **A** — Traseu diagonal / serpentin | `51a2ac2` | `PATH_WAYPOINTS` + `buildRoad()` (scări Bresenham 45°, S-curve de la spawn colț stânga-sus la core jos-centru); flow-field restricționat pe celulele lane ⇒ turnurile se pun doar pe platforme, traseul nu poate fi blocat; board panel/lane/platforme pre-randat o dată pe resize (fără gradiente și fără `shadowBlur` per-frame); SW cache v8 |
 | **B** — Muzică synthwave + SFX stratificate | `0bce174` | Limiter `DynamicsCompressor` pe master + `musicBus` separat; 16 SFX cu corp stratificat (sub-bass, armonici detunsați, zgomot filtrat din buffer-ul partajat); BGM procedural pe `AudioContext.currentTime` (lookahead 0,35 s, pași de 16-imi), progresie Am-F-C-G în 3 mode (meniu pad 92 BPM, joc arp/bass/kick/hats 104 BPM, boss 116 BPM); sincronizare cu state machine-ul din `main.js`; SW cache v7 |
+| **F1** — Tile-builder: CORE central + piese 1–2 celule + portaluri SPAWN dinamice | (acest commit) | `CORE_CELL` în mijlocul grilei (4,7) + `INITIAL_ROAD` (3 celule nord, o linie cu un singur capăt deschis); `TILE_PIECES` de 1–2 celule cu porturi (indici `DIRS`) și `rotatePiece()` pură; celulele de drum se leagă doar pe porturi reciproce, CORE acceptă orice port; port dangling deasupra unei celule libere = capăt deschis = portal SPAWN (derivat din `Pathfinder.openEnds()`, deci portalurile se mută automat la fiecare extensie; T-junction deschide al doilea portal, spawn round-robin în `main.js`); `canPlaceRoadPiece()/placeRoadPiece()` validează portul reciproc + celule libere + legătura la un capăt deschis ⇒ drumul rămâne mereu o rețea continuă spre CORE (L-01/L-02 prin construcție); board re-cosut la plasare, inamicii re-pathuiți; randare tot pre-randată single-drawImage (fără regressie P-03/P-06); `smoke-test.mjs` actualizat la noua geometrie. Verificat: `npm run check` + teste Node (rotire, plasare 1/2 celule, mutare SPAWN, T→2 portaluri, pathfinding spre CORE, refuz turn pe drum) |
 
 Altele deja în trunchi: peisaj procedural pre-randat (`landscape.js`), artă toon pentru personaje și
 turnuri cu siluete pe roluri (`toon.js`), boss-ul de la primul val-5 rebalansat.
@@ -59,6 +60,10 @@ turnuri cu siluete pe roluri (`toon.js`), boss-ul de la primul val-5 rebalansat.
 - [ ] **E3** Hardening `capacitor.config.json` (**S-05**) + garda `e.repeat`/focus și mutarea `preventDefault()` după verificarea stării (**S-06**).
 - [ ] **E4** `npm run cap:android` (binar local) → `npx cap sync` → `cd android && ./gradlew assembleDebug`; notează pașii și rezultatele aici.
 - [ ] **E5** Test pe dispozitiv/emulator WebView: FPS, audio la primul tap, offline după prima pornire, `visibilitychange`.
+
+### Etapa F — Mod tile-builder (continuare)
+- [ ] **F2** UI de selecție/rotire a piesei (dock de piese + preview hover în `ui.js`/`renderer.js`); costuri non-zero în `TILE_PIECES` citite din `ECONOMY`.
+- [ ] **F3** Limite de rețea (plafon celule de drum / cost per extensie) + ecuație economică: portaluri mai multe = valuri mai grele, validat în Node.
 
 ### Igienă continuă (câte un commit, ori de câte ori se ivește prilejul)
 - [ ] `npm run check` să acopere și `www/js/toon.js`, `www/js/boot.js`, `www/sw.js` (azi lipsesc din script); orice modul nou se adaugă **și** în `PRECACHE` (S-04).

@@ -1,54 +1,90 @@
-// config.js — balance constants: grid, economy, towers (Lv.1-3), enemies, palette.
+// config.js — balance constants: grid, road pieces (tile-builder), economy, towers (Lv.1-3), enemies, palette.
 
-export const GRID = {
-  cols: 9,
-  rows: 14,
-  spawn: { col: 0, row: 0 },
-  core: { col: 4, row: 13 },
+// Tile-builder mode: the CORE sits at the centre of the grid and the player
+// grows the road; SPAWN portals live at the open ends of the road network.
+export const COLS = 9;
+export const ROWS = 14;
+
+export const CORE_CELL = {
+  col: Math.floor(COLS / 2),
+  row: Math.floor(ROWS / 2),
 };
 
-// Serpentine lane: corner waypoints from spawn (top-left) to core (bottom).
-// Consecutive waypoints that differ on both axes expand into 45-degree
-// staircases, so the lane reads as a diagonal S while staying grid-adjacent.
-export const PATH_WAYPOINTS = [
-  { col: 0, row: 0 },
-  { col: 7, row: 2 },
-  { col: 7, row: 4 },
-  { col: 1, row: 6 },
-  { col: 1, row: 8 },
-  { col: 7, row: 10 },
-  { col: 7, row: 12 },
-  { col: 4, row: 13 },
+export const GRID = {
+  cols: COLS,
+  rows: ROWS,
+  spawn: { col: 4, row: 4 }, // seed portal; live portals are dynamic: Pathfinder.spawnCells()
+  core: CORE_CELL,
+};
+
+// Directions in clockwise order, so (dir + rot) % 4 is a quarter turn.
+export const DIRS = [
+  { name: 'N', dx: 0, dy: -1 },
+  { name: 'E', dx: 1, dy: 0 },
+  { name: 'S', dx: 0, dy: 1 },
+  { name: 'W', dx: -1, dy: 0 },
 ];
+export const rotDir = (d, rot) => (d + rot) % 4;
+export const opposite = (d) => (d + 2) % 4;
 
-// Ordered lane cells (spawn -> core). Only these cells are walkable; every
-// other cell is a build platform. Mixed-axis legs expand into staircases with
-// Bresenham-style even interleaving so they read as smooth 45° diagonals.
-export function buildRoad(waypoints = PATH_WAYPOINTS) {
-  const cells = [{ ...waypoints[0] }];
-  for (let i = 0; i < waypoints.length - 1; i++) {
-    const from = waypoints[i];
-    const to = waypoints[i + 1];
-    const dc = Math.sign(to.col - from.col);
-    const dr = Math.sign(to.row - from.row);
-    const dist = Math.abs(to.col - from.col) + Math.abs(to.row - from.row);
-    let { col, row } = from;
-    let doneC = 0;
-    for (let s = 1; s <= dist; s++) {
-      const wantC = Math.round((s * Math.abs(to.col - from.col)) / dist);
-      if (wantC > doneC) {
-        col += dc;
-        doneC = wantC;
-      } else {
-        row += dr;
-      }
-      cells.push({ col, row });
-    }
-  }
-  return cells;
+// Seed segment: 3 road cells north of the core, joined N-S. The south tip
+// meets the core (the core accepts every facing port), so the network starts
+// as one connected line with a single open end (spawn portal) at the far tip;
+// DOUBLE_T is what splits the network into a second open end.
+// `ports` lists the DIRS indices a walker may exit through; two adjacent road
+// cells connect only when both expose reciprocal ports.
+export const INITIAL_ROAD = [0, 1, 2].map((i) => ({
+  col: CORE_CELL.col,
+  row: CORE_CELL.row - 3 + i,
+  ports: [0, 2],
+}));
+
+// Road pieces are 1–2 cells. `cells` are (col,row) offsets from the placement
+// origin; `ports` are DIRS indices. Rotating turns offsets and ports together.
+// A dangling port is an edge to nowhere: over an empty cell it is an open end
+// (portal candidate); facing a tower or the core body is rejected.
+export const TILE_PIECES = {
+  SINGLE_STRAIGHT: {
+    name: 'Straight', size: 1, cost: 0,
+    cells: [{ c: 0, r: 0 }], ports: [[0, 2]],
+  },
+  SINGLE_TURN: {
+    name: 'Turn', size: 1, cost: 0,
+    cells: [{ c: 0, r: 0 }], ports: [[0, 1]],
+  },
+  DOUBLE_STRAIGHT: {
+    name: 'Long Straight', size: 2, cost: 0,
+    cells: [{ c: 0, r: 0 }, { c: 0, r: 1 }], ports: [[0, 2], [0, 2]],
+  },
+  // Joint: cell0.S <-> cell1.N; dangling cell0.E and cell1.S form an E→S bend.
+  DOUBLE_L: {
+    name: 'L-Bend', size: 2, cost: 0,
+    cells: [{ c: 0, r: 0 }, { c: 0, r: 1 }], ports: [[1, 2], [0, 2]],
+  },
+  // Stem cell carries the through N–S line plus one E branch; the tip cell
+  // extends the branch (W–E) and dangles E. Placed with its S port on an open
+  // end it keeps the line going (N) AND opens a second SPAWN portal at E.
+  DOUBLE_T: {
+    name: 'T-Junction', size: 2, cost: 0,
+    cells: [{ c: 0, r: 0 }, { c: 1, r: 0 }], ports: [[0, 1, 2], [3, 1]],
+  },
+};
+
+// Rotate a piece by rot quarter turns (0..3) clockwise around its origin.
+// Pure: returns { cells:[{col,row}], ports:[[dirs], …] } in absolute offsets.
+// Screen coords (y down): one clockwise quarter turn maps (c,r) -> (-r,c).
+export function rotatePiece(piece, rot) {
+  const q = ((rot % 4) + 4) % 4;
+  const turn = ({ c, r }) => {
+    let [x, y] = [c, r];
+    for (let i = 0; i < q; i++) [x, y] = [-y, x];
+    return { col: x, row: y };
+  };
+  return {
+    cells: piece.cells.map(turn),
+    ports: piece.ports.map((list) => list.map((d) => rotDir(d, q))),
+  };
 }
-
-export const ROAD = buildRoad();
 
 export const PALETTE = {
   bg: '#05060f',

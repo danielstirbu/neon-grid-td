@@ -1,6 +1,7 @@
-// renderer.js — Canvas 2D at native DPR: meadow backdrop, grid, towers, enemies, projectiles, beams, VFX.
+// renderer.js — Canvas 2D at native DPR: meadow backdrop, tile-builder road
+// network (baked board), towers, enemies, projectiles, beams, VFX.
 // Characters are drawn with the toon.js cartoon helpers; projectiles/beams/particles stay neon.
-import { GRID, PALETTE, ROAD } from './config.js';
+import { GRID, PALETTE, CORE_CELL } from './config.js';
 import { drawToonEnemy, drawToonTower, toonText, clearGradCache } from './toon.js';
 import { Landscape } from './landscape.js';
 
@@ -41,8 +42,16 @@ export class Renderer {
     this.landscape = new Landscape();
     this.glowSprites = new Map();
     for (const color of GLOW_COLORS) this.glowSprites.set(color, makeGlowSprite(color));
-    this.board = null; // pre-rendered panel + lane + platforms (P-03/P-06 safe)
+    this.board = null; // pre-rendered panel + road network + platforms (P-03/P-06 safe)
+    this.path = null; // Pathfinder set by Game via setNetwork(); board derives from it
     this.resize();
+  }
+
+  // The road network lives in the Pathfinder; the board must be re-baked
+  // whenever the network changes (new run, placed road piece).
+  setNetwork(pathfinder) {
+    this.path = pathfinder;
+    this._buildBoard();
   }
 
   _glow(color) {
@@ -77,8 +86,9 @@ export class Renderer {
     clearGradCache(); // P-03: toon gradients are keyed by cell size s; drop stale entries
   }
 
-  // Pre-render panel, platforms and the neon lane once per resize; per frame it
-  // is a single drawImage (no per-frame gradients — P-03 — and no shadowBlur — P-06).
+  // Pre-render panel, platforms and the road network once per rebuild; per
+  // frame it is a single drawImage (no per-frame gradients — P-03 — and no
+  // shadowBlur — P-06). Rebuilt on resize and whenever the road grows.
   _buildBoard() {
     const { cell, dpr } = this;
     const w = cell * GRID.cols;
@@ -95,12 +105,12 @@ export class Renderer {
     g.fillStyle = 'rgba(10,26,18,0.4)';
     g.fillRect(0, 0, w, h);
 
-    const road = new Set(ROAD.map(({ col, row }) => row * GRID.cols + col));
+    const net = this.path;
 
-    // Build platforms: raised tiles with corner studs, inset from the lane.
+    // Build platforms: raised tiles with corner studs, inset from the road.
     for (let row = 0; row < GRID.rows; row++) {
       for (let col = 0; col < GRID.cols; col++) {
-        if (road.has(row * GRID.cols + col)) continue;
+        if (net && net.isRoad(col, row)) continue;
         const x = col * cell;
         const y = row * cell;
         const p = Math.max(2, cell * 0.11);
@@ -118,26 +128,74 @@ export class Renderer {
       }
     }
 
-    // Lane: wide dark stroke (mitered joints keep corners crisp), then the
-    // neon edge and the dashed direction line follow the same polyline.
-    const pts = ROAD.map(({ col, row }) => ({ x: (col + 0.5) * cell, y: (row + 0.5) * cell }));
-    g.lineJoin = 'round';
-    g.lineCap = 'round';
-    const lane = (width, stroke, dash, offset) => {
-      g.lineWidth = width;
-      g.strokeStyle = stroke;
-      g.setLineDash(dash || []);
-      g.lineDashOffset = offset || 0;
-      g.beginPath();
-      pts.forEach((pt, i) => (i === 0 ? g.moveTo(pt.x, pt.y) : g.lineTo(pt.x, pt.y)));
-      g.stroke();
-    };
-    // Widest first: cyan rim, then the dark fill on top leaves a neon border;
-    // the dashed centerline shows the travel direction.
-    lane(cell * 0.94, 'rgba(0,229,255,0.45)');
-    lane(cell * 0.78, '#081221');
-    lane(Math.max(1.5, cell * 0.09), 'rgba(0,229,255,0.75)', [cell * 0.42, cell * 0.5]);
-    g.setLineDash([]);
+    if (!net) return;
+
+    // Road tiles: dark plate with a neon rim; every port grows a connector tab
+    // to the cell border, so reciprocal ports read as seamless joints and a
+    // dangling port reads as an open connector pointing at its SPAWN portal.
+    const inset = Math.max(2, cell * 0.12);
+    const tabHalf = cell * 0.21;
+    const tabLen = cell / 2 - inset + 1;
+    for (const { col, row } of net.cells.values()) {
+      const x = col * cell;
+      const y = row * cell;
+      const cx = x + cell / 2;
+      const cy = y + cell / 2;
+      g.fillStyle = '#081221';
+      g.strokeStyle = 'rgba(0,229,255,0.55)';
+      g.lineWidth = Math.max(1, cell * 0.05);
+      g.fillRect(x + inset, y + inset, cell - inset * 2, cell - inset * 2);
+      g.strokeRect(x + inset + 0.5, y + inset + 0.5, cell - inset * 2 - 1, cell - inset * 2 - 1);
+      for (let d = 0; d < 4; d++) {
+        if (!net.hasPort(col, row, d)) continue;
+        const dx = [0, 1, 0, -1][d];
+        const dy = [-1, 0, 1, 0][d];
+        // tab from the plate edge to the cell border
+        const tx = dx === 1 ? cx : dx === -1 ? cx - tabLen : cx - tabHalf;
+        const ty = dy === 1 ? cy : dy === -1 ? cy - tabLen : cy - tabHalf;
+        const tw = dx === 0 ? tabHalf * 2 : tabLen;
+        const th = dy === 0 ? tabHalf * 2 : tabLen;
+        g.fillStyle = '#081221';
+        g.fillRect(tx, ty, tw, th);
+        // open connector: neon cap where the port faces an empty cell
+        const ex = col + dx;
+        const ey = row + dy;
+        const matched = (net.isRoad(ex, ey) && net.hasPort(ex, ey, (d + 2) % 4)) || net.isCore(ex, ey);
+        if (!matched) {
+          g.strokeStyle = 'rgba(0,229,255,0.9)';
+          g.lineWidth = Math.max(1.5, cell * 0.08);
+          const bx = x + cell / 2 + dx * (cell / 2 - 1);
+          const by = y + cell / 2 + dy * (cell / 2 - 1);
+          g.beginPath();
+          if (dx !== 0) {
+            g.moveTo(bx, cy - tabHalf);
+            g.lineTo(bx, cy + tabHalf);
+          } else {
+            g.moveTo(cx - tabHalf, by);
+            g.lineTo(cx + tabHalf, by);
+          }
+          g.stroke();
+        }
+      }
+      // baked flow hint: small chevron pointing one step closer to the core
+      const here = net.distAt(col, row);
+      if (here > 0) {
+        const nxt = net.nextStep(col + 0.5, row + 0.5);
+        const ang = Math.atan2(nxt.y - (row + 0.5), nxt.x - (col + 0.5));
+        g.save();
+        g.translate(cx, cy);
+        g.rotate(ang);
+        g.strokeStyle = 'rgba(0,229,255,0.8)';
+        g.lineWidth = Math.max(1, cell * 0.06);
+        const a = cell * 0.16;
+        g.beginPath();
+        g.moveTo(-a * 0.5, -a);
+        g.lineTo(a * 0.6, 0);
+        g.lineTo(-a * 0.5, a);
+        g.stroke();
+        g.restore();
+      }
+    }
 
     // Panel frame on top of everything.
     g.strokeStyle = 'rgba(255,255,255,0.28)';
@@ -164,12 +222,20 @@ export class Renderer {
   drawGrid(hover) {
     const { ctx, cell } = this;
     ctx.save();
-    // Panel + platforms + lane were baked into this.board on resize.
+    // Panel + platforms + road network were baked into this.board.
     if (this.board) ctx.drawImage(this.board, this.ox, this.oy, cell * GRID.cols, cell * GRID.rows);
 
-    // Spawn & core markers
-    this._marker(GRID.spawn, PALETTE.magenta, 'SPAWN');
-    this._marker(GRID.core, PALETTE.green, 'CORE');
+    // CORE at the centre; SPAWN portals pulse at every open end of the network.
+    this._marker(CORE_CELL, PALETTE.green, 'CORE');
+    if (this.path) {
+      const pulse = 0.55 + 0.35 * Math.sin(this.time * 4);
+      for (const end of this.path.spawnCells()) {
+        ctx.save();
+        ctx.globalAlpha = pulse;
+        this._marker(end, PALETTE.magenta, 'SPAWN');
+        ctx.restore();
+      }
+    }
 
     if (hover) {
       const { col, row, valid } = hover;

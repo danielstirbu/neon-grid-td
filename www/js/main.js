@@ -12,6 +12,7 @@ class Game {
     this.canvas = document.getElementById('game');
     this.renderer = new Renderer(this.canvas);
     this.path = new Pathfinder(GRID.cols, GRID.rows, GRID.spawn, GRID.core);
+    this.renderer.setNetwork(this.path);
     this.ui = new UI(this);
 
     this.state = 'menu'; // menu | playing | over
@@ -98,6 +99,8 @@ class Game {
     this.floaters = [];
     this.towerGrid.clear();
     this.path = new Pathfinder(GRID.cols, GRID.rows, GRID.spawn, GRID.core);
+    this.renderer.setNetwork(this.path);
+    this._spawnCursor = 0;
     this.selectedTower = null;
     this.ui.closeTowerMenuSilent();
     this.ui.clearTowerSelect();
@@ -185,8 +188,14 @@ class Game {
     while (ev.length && ev[0].at <= this.spawnClock) {
       const e = ev.shift();
       const enemy = new Enemy(e.type, this.waveScale);
-      enemy.x = GRID.spawn.col + 0.5;
-      enemy.y = GRID.spawn.row + 0.5;
+      // SPAWN portals are the open ends of the road network; round-robin so
+      // a T-junction (two open ends) feeds both portals evenly.
+      const portals = this.path.spawnCells();
+      const portal = portals.length
+        ? portals[this._spawnCursor++ % portals.length]
+        : GRID.spawn;
+      enemy.x = portal.col + 0.5;
+      enemy.y = portal.row + 0.5;
       this.repath(enemy);
       this.enemies.push(enemy);
     }
@@ -342,7 +351,7 @@ class Game {
     }
     if (!this.path.canPlace(col, row)) {
       audio.play('deny');
-      this.ui.toast(this.path.isBlocked(col, row) ? 'CELL OCCUPIED' : 'THE LANE IS NOT BUILDABLE');
+      this.ui.toast(this.path.isBlocked(col, row) ? 'CELL OCCUPIED' : 'THE ROAD IS NOT BUILDABLE');
       this.ui.vibrate(30);
       return false;
     }
@@ -380,6 +389,26 @@ class Game {
     burst(this.particles, col + 0.5, row + 0.5, def.color, 8, 1.6, 0.4);
     if (this.cash < def.cost) this.ui.clearTowerSelect();
     return true;
+  }
+
+  // Tile-builder: grow the road with a TILE_PIECES piece at origin, rot
+  // quarter-turns. Portals (open ends) move automatically; the baked board is
+  // re-rendered and every walker re-joins the new flow-field.
+  placeRoadPiece(piece, originCell, rotation) {
+    const res = this.path.placeRoadPiece(piece, originCell, rotation);
+    if (!res.ok) {
+      audio.play('deny');
+      this.ui.toast(res.reason);
+      this.ui.vibrate(30);
+      return res;
+    }
+    this.renderer._buildBoard();
+    this.repathAll();
+    for (const c of res.cells) burst(this.particles, c.col + 0.5, c.row + 0.5, PALETTE.cyan, 6, 1.8, 0.35);
+    audio.play('place');
+    this.ui.vibrate(12);
+    this.requestRender();
+    return res;
   }
 
   upgradeSelected() {

@@ -81,33 +81,42 @@ async function runViewport(browser, vp) {
   const cashAfterBad = await page.evaluate(() => window.game.cash);
   ok(cashAfterBad === 100, 'no credits spent on rejected placement');
 
-  // Anti-blockade: ring the core's 3 neighbours — the last closing cell must be refused
-  // and the spawn->core flow field must stay connected.
+  // Tile-builder: the road is fixed (towers only build on platforms), so all
+  // three platform cells around the core are placeable and the flow field from
+  // the spawn portal (open end at 4,4) must stay connected to the core.
   const blockade = await page.evaluate(() => {
     const g = window.game;
     g.cash = 999;
     g.ui.selectedTowerKey = 'pulse';
     let placed = 0;
-    for (const [c, r] of [[3, 13], [5, 13], [4, 12]]) {
+    for (const [c, r] of [[3, 7], [5, 7], [4, 8]]) {
       const before = g.towers.length;
       g.tryPlaceTower(c, r);
       if (g.towers.length > before) placed++;
     }
-    const connected = g.path.distAt(4, 0) >= 0;
+    const roadCell = g.tryPlaceTower(4, 6); // road tile: never buildable
+    const connected = g.path.distAt(4, 4) >= 0;
     g.ui.clearTowerSelect();
-    return { placed, connected };
+    return { placed, roadCell, connected };
   });
-  ok(blockade.placed === 2 && blockade.connected, `core can never be fully sealed (placed=${blockade.placed}/3, spawn reachable=${blockade.connected})`);
+  ok(blockade.placed === 3 && !blockade.roadCell && blockade.connected,
+    `road can never be blocked (platforms=${blockade.placed}/3, road refused=${!blockade.roadCell}, portal reachable=${blockade.connected})`);
 
   // Start wave 1: enemies spawn and follow the BFS path.
   await page.click('#btn-next-wave');
   await page.waitForTimeout(1400);
   const wave = await page.evaluate(() => {
     const g = window.game;
-    return { active: g.waveActive, count: g.enemies.length, moved: g.enemies.some((e) => e.y > 1.0) };
+    const portal = g.path.spawnCells()[0];
+    return {
+      active: g.waveActive,
+      count: g.enemies.length,
+      onPortal: g.enemies.every((e) => Math.floor(e.x) === portal.col),
+      moved: g.enemies.some((e) => e.y > portal.row + 0.5),
+    };
   });
   ok(wave.active && wave.count > 0, `wave 1 started with ${wave.count} enemies`);
-  ok(wave.moved, 'enemies move along the BFS path');
+  ok(wave.onPortal && wave.moved, 'enemies spawn at the open-end portal and move along the BFS path');
 
   // Towers engage within a couple of seconds.
   await page.waitForTimeout(2200);

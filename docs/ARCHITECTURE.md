@@ -6,16 +6,16 @@ Toate modulele sunt ES native (`<script type="module">`), fără bundler. Graful
 
 | Fișier | Responsabilitate unică | API cheie | Depinde de |
 |---|---|---|---|
-| `www/js/config.js` | Constante de balans și date statice ale hărții | `GRID`, `PATH_WAYPOINTS`, `buildRoad()`, `ROAD`, `PALETTE`, `ECONOMY`, `TOWERS`, `TOWER_ORDER`, `ENEMIES`, `WAVES_META`, `TARGET_MODES`, `SPEED_OPTIONS`, `towerLevelStats()`, `towerInvested()` | — |
-| `www/js/pathfinding.js` | Flow-field BFS pe celulele de tip „lane" + validări de plasare | `Pathfinder`: `recompute()`, `canPlace()`, `place()/remove()`, `isRoad()`, `isReachableFromCore()`, `distAt()`, `nextStep()` | `config.ROAD` |
+| `www/js/config.js` | Constante de balans + date tile-builder (piese de drum, porturi, rotații) | `GRID`, `CORE_CELL`, `DIRS`, `rotDir()`, `opposite()`, `INITIAL_ROAD`, `TILE_PIECES`, `rotatePiece()`, `PALETTE`, `ECONOMY`, `TOWERS`, `TOWER_ORDER`, `ENEMIES`, `WAVES_META`, `TARGET_MODES`, `SPEED_OPTIONS`, `towerLevelStats()`, `towerInvested()` | — |
+| `www/js/pathfinding.js` | Rețeaua de drum (celule cu porturi) + flow-field BFS spre CORE + validări de plasare (turn și piese de drum) | `Pathfinder`: `recompute()`, `canPlace()`, `place()/remove()`, `isRoad()`, `isCore()`, `hasPort()`, `openEnds()`, `spawnCells()`, `canPlaceRoadPiece()`, `placeRoadPiece()`, `isReachableFromCore()`, `distAt()`, `nextStep()` | `config` (CORE_CELL, DIRS, INITIAL_ROAD, rotatePiece) |
 | `www/js/entities.js` | Stare și comportament pe entitate (fără canvas, fără DOM) | `Enemy`, `Tower`, `Projectile`, `Beam`, `Particle`, `FloatingText`, `burst()` (plafon `MAX_PARTICLES`) | `config` |
 | `www/js/waves.js` | Generare de valuri (campanie 20 + boss + endless) | `waveGroups()`, `waveScale()`, `buildSchedule()` | `config.WAVES_META` |
 | `www/js/audio.js` | Sinteză procedurală Web Audio: 16 SFX + BGM pe 3 mode | singleton `audio`: `unlock()`, `play(name)`, `setEnabled()`, `setMusicMode(mode)` | — |
 | `www/js/toon.js` | Artă procedurală (personaje, turnuri, text), cache de gradiente | `drawToonEnemy()`, `drawToonTower()`, `toonText()`, `clearGradCache()`, helpers `rr/roundPoly/bodyPath/eyes/lighten/darken` | `config.PALETTE` |
 | `www/js/landscape.js` | Fundal procedural pre-randat o singură dată pe resize | `Landscape.build(w,h,dpr,avoid)`, `.layer` (canvas offscreen) | — |
-| `www/js/renderer.js` | Punerea entităților pe canvas; board offscreen; sprite-uri de glow | `Renderer`: `resize()`, `_buildBoard()`, `toGrid()`, `sx()/sy()`, `begin()`, `drawGrid/Tower/Enemy/Projectile/Beam/Particle/FloatingText/Range/Selected` | `config`, `toon`, `landscape` |
+| `www/js/renderer.js` | Punerea entităților pe canvas; board offscreen (drum + porturi randate din network); sprite-uri de glow | `Renderer`: `setNetwork()`, `resize()`, `_buildBoard()`, `toGrid()`, `sx()/sy()`, `begin()`, `drawGrid/Tower/Enemy/Projectile/Beam/Particle/FloatingText/Range/Selected` | `config`, `toon`, `landscape` |
 | `www/js/ui.js` | HUD, dock de turnuri, meniu contextual, toast/banner, vibrații | `UI`: `updateHUD()` (dirty-check), `toggleTowerSelect()`, `openTowerMenu()/refreshTowerMenu()/closeTowerMenu()`, `showStart/Over/PauseOverlay()`, `toast()`, `vibrate()` | `config`, `audio` |
-| `www/js/main.js` | Orchestrare: buclă, state machine, input, combat, economie | `Game`: `begin()`, `retry()`, `toMenu()`, `togglePause/Speed/Sound()`, `startNextWave()`, `tryPlaceTower()`, `repath()/repathAll()`, `fireTower()`, `frame()/step()/render()`, `destroy()` | toate de mai sus |
+| `www/js/main.js` | Orchestrare: buclă, state machine, input, combat, economie | `Game`: `begin()`, `retry()`, `toMenu()`, `togglePause/Speed/Sound()`, `startNextWave()`, `tryPlaceTower()`, `placeRoadPiece()`, `repath()/repathAll()`, `fireTower()`, `frame()/step()/render()`, `destroy()` | toate de mai sus |
 | `www/js/boot.js` | Înregistrarea service worker-ului (fișier separat cere CSP `script-src 'self'`) | — | — |
 | `www/sw.js` | Cache-first, offline complet; navigare network-first cu fallback | `CACHE` (versiune), `PRECACHE` | — |
 
@@ -36,12 +36,14 @@ requestAnimationFrame ──► frame(now)
 
 ## Coordonate și pathfinding
 
-- Grila: `GRID.cols × GRID.rows` (9×14), celule în „unit space"; nucleul este la `GRID.core`, spawn-ul la `GRID.spawn`.
+- Grila: `GRID.cols × GRID.rows` (9×14), celule în „unit space"; CORE-ul stă în mijlocul grilei (`CORE_CELL` = 4,7); `GRID.spawn` e doar un fallback, portalurile reale sunt dinamice (vezi mai jos).
 - Transformare: `Renderer.sx(x)=ox+x*cell`, `sy(y)=oy+y*cell`; invers `Renderer.toGrid(px,py)`. Canvas-ul este dimensionat la `dpr` nativ.
-- `ROAD` (din `config.js`) este lista ordonată a celulelor de drum, expandată din `PATH_WAYPOINTS` în scări Bresenham de 45° — deci traseul arată diagonal/serpentin dar rămâne adiacent pe grilă.
-- `Pathfinder.recompute()` face BFS pornind din `core`, dar **doar prin celule din `ROAD`**. Rezultatul e `dist[]` (distanță în pași până la core).
+- Tile-builder: rețeaua de drum este o mulțime de celule, fiecare cu un mask de porturi (indici `DIRS` = N,E,S,W). Două celule de drum adiacente se leagă doar dacă ambele expun porturi reciproce; CORE-ul se leagă de orice port cu care se întâlnește. `INITIAL_ROAD` = 3 celule nord de CORE (o linie cu un singur capăt deschis).
+- Un port care nu întâlnește o celulă de drum/CORE alăturat e *dangling*: deasupra unei celule libere formează un **capăt deschis** = portal SPAWN. `Pathfinder.openEnds()`/`spawnCells()` le calculează din network — portalurile se mută automat când jucătorul extinde drumul (`TILE_PIECES` de 1–2 celule, rotite cu `rotatePiece()`; plasarea validează legătura reciprocă + celule libere + cel puțin un port pe un capăt deschis).
+- `Pathfinder.recompute()` face BFS pornind din CORE, **doar pe muchiile cu porturi reciproce**. Rezultatul e `dist[]` (distanță în pași până la core).
 - `nextStep(fx,fy)` alege vecinul cu `dist` mai mică → punct central al celulei. Mono-descrescător, deci nu poate boucla.
-- Consecință structurală: turnurile se pot construi **doar pe platforme** (celule care nu sunt `ROAD`), deci traseul nu poate fi blocat — L-01/L-02 sunt adevărate prin construcție. Guard-ele `isReachableFromCore()` și `_escapeToReachable()` rămân ca centură de siguranță.
+- Consecință structurală: turnurile se pot construi **doar pe platforme** (celule care nu sunt drum și nu sunt CORE), iar piesele de drum nu pot suprapune turnuri sau alte celule, deci traseul nu poate fi blocat — L-01/L-02 sunt adevărate prin construcție. Guard-ele `isReachableFromCore()` și `_escapeToReachable()` rămân ca centură de siguranță.
+- Spawn-ul în `main.js`: inamicii apar round-robin pe `path.spawnCells()` (un T-junction deschide un al doilea portal); după fiecare `placeRoadPiece()` board-ul se re-coace (`renderer._buildBoard()`) și toți inamicii se re-atașează de flow-field (`repathAll()`).
 
 ## Flux de input / UI
 
@@ -65,7 +67,7 @@ document.visibilitychange → auto-pauză + overlay de resume
 
 **Inamic nou** — intrare în `config.ENEMIES` (`hp/speed/reward/armor/shape/color/size/slowResist`), eventual o trăsătură comportamentală în `Enemy.update()`; apare în valuri prin listele din `waves.js`. Randarea merge prin `drawToonEnemy()` pe baza lui `shape`, deci de obicei nu e nevoie de cod grafic nou.
 
-**Hartă / traseu nou** — se schimbă doar `PATH_WAYPOINTS` (și `GRID.spawn`/`GRID.core`) în `config.js`; `ROAD`, flow-field-ul, board-ul randat și validările se regenerează automat. Pentru hărți multiple, `ROAD` devine un câmp selectabil pe hartă, iar `Pathfinder` primește deja `cols/rows/spawn/core` din constructor — nu introduce `if (mapId === …)` în `pathfinding.js` sau `renderer.js`.
+**Piesă de drum nouă** — doar o intrare nouă în `config.TILE_PIECES` (offseturi `cells` + `ports` per celulă, 1–2 celule); validarea, plasarea, flow-field-ul, portalurile și randarea (tab-uri de connector + capace neon pentru porturile dangling) vin gratuit din `Pathfinder` și `Renderer`. Pentru hărți multiple, rețeaua inițială devine un câmp selectabil pe hartă, iar `Pathfinder` primește deja `cols/rows/spawn/core/initialRoad` din constructor — nu introduce `if (mapId === …)` în `pathfinding.js` sau `renderer.js`.
 
 **Sunet nou** — un singur `case` în `audio.play()` (sau un pas nou în `_scheduleStep()` pentru muzică), folosind exclusiv `_tone()`, `_sub()`, `_noise()` și buffer-ul de zgomot partajat. Orice nod creat se auto-deconectează prin `onended`. Numărul de sunete rămâne sub rate-limiter.
 
