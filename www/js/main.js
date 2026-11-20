@@ -3,7 +3,7 @@ import { GRID, ECONOMY, SPEED_OPTIONS, PALETTE, TOWERS, TILE_PIECES, rotatePiece
 import { audio } from './audio.js';
 import { Pathfinder } from './pathfinding.js';
 import { Enemy, Tower, Projectile, Beam, FloatingText, burst } from './entities.js';
-import { waveGroups, waveScale, buildSchedule, makePieceRng, createPieceQueue } from './waves.js';
+import { waveGroups, waveScale, enemyScale, buildSchedule, makePieceRng, createPieceQueue } from './waves.js';
 import { Renderer } from './renderer.js';
 import { UI } from './ui.js';
 
@@ -188,15 +188,15 @@ class Game {
     // road keeps a continuous line to the core before enemies march.
     const autoCells = this._autoPlacePending();
     if (early && this.countdownArmed && this.waveCountdown > 0.5) {
-      this.cash += ECONOMY.earlyWaveBonus;
+      const bonus = ECONOMY.earlyWaveBonus(this.wave + 1);
+      this.cash += bonus;
       this.floaters.push(new FloatingText(
-        GRID.core.col + 0.5, GRID.core.row - 0.5, `+¤${ECONOMY.earlyWaveBonus} EARLY`, PALETTE.yellow, 0.55));
+        GRID.core.col + 0.5, GRID.core.row - 0.5, `+¤${bonus} EARLY`, PALETTE.yellow, 0.55));
     }
     this.wave += 1;
     const groups = waveGroups(this.wave, this.endless);
     this.schedule = buildSchedule(groups);
     this.spawnClock = 0;
-    this.waveScale = waveScale(this.wave, this.endless);
     this.waveActive = true;
     this._armNextCountdown();
     if (autoCells.length) this.requestRender();
@@ -336,7 +336,7 @@ class Game {
     const ev = this.schedule.events;
     while (ev.length && ev[0].at <= this.spawnClock) {
       const e = ev.shift();
-      const enemy = new Enemy(e.type, this.waveScale);
+      const enemy = new Enemy(e.type, enemyScale(this.wave, e.type, this.endless), waveScale(this.wave, this.endless));
       // Exactly one SPAWN portal is live — the farthest open end from the
       // core; every road extension moves it, so all enemies enter through it.
       const portal = this.path.spawnCells()[0] || GRID.spawn;

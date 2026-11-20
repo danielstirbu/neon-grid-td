@@ -1,17 +1,23 @@
 // entities.js — Tower, Enemy, Projectile, Beam, Particle, FloatingText.
-import { TOWERS, ENEMIES, ECONOMY, towerLevelStats, towerInvested, TARGET_MODES } from './config.js';
+import { TOWERS, ENEMIES, ECONOMY, WAVES_META, towerLevelStats, towerInvested, TARGET_MODES } from './config.js';
 
 export class Enemy {
-  constructor(typeKey, waveScale = 1) {
+  constructor(typeKey, waveScale = 1, plainScale = waveScale) {
     const def = ENEMIES[typeKey];
     this.def = def;
     this.key = def.key;
     this.isBoss = !!def.boss;
     this.maxHp = def.hp * waveScale;
     this.hp = this.maxHp;
-    this.baseSpeed = def.speed;
-    this.speed = def.speed;
-    this.armor = def.armor;
+    // plainScale is the un-multiplied wave scale: boss HP multipliers must not
+    // make reapers sprint or become immune. Late walkers cross the lane
+    // faster (≈+12% speed at wave 20) and armored elites harden with the
+    // wave (see WAVES_META.speedGrowth / armorGrowth; L-03's 10% floor still
+    // bounds the mitigation — chip damage never hits zero).
+    const grow = Math.max(0, plainScale - 1);
+    this.baseSpeed = def.speed * (1 + grow * WAVES_META.speedGrowth);
+    this.speed = this.baseSpeed;
+    this.armor = def.armor ? def.armor + Math.floor(grow * WAVES_META.armorGrowth) : 0;
     this.reward = def.reward;
     this.coreDmg = def.coreDmg;
     this.size = def.size;

@@ -1,6 +1,6 @@
 // waves.js — 20-wave campaign generator, boss every 5 waves, endless scaling past 20,
 // + the tile-builder piece queue (seeded, size-balanced).
-import { TILE_PIECES, WAVES_META } from './config.js';
+import { TILE_PIECES, WAVES_META, ENEMIES } from './config.js';
 
 // A wave is a list of groups: { type, count, gap (s between spawns), delay (s until group starts) }.
 function campaignWave(n) {
@@ -21,8 +21,11 @@ function campaignWave(n) {
     push('sprinter', 8, 0.45);
     push('drone', 6, 0.7, 4);
   } else if (n <= 8) {
-    push('drone', 7 + n, 0.6);
-    push('sprinter', 4 + n, 0.42, 3);
+    // Boss waves (only w5 sits in this band) run a lighter escort so the
+    // reaper itself — not the swarm — is the threat at wave 5.
+    const eMul = boss ? 0.72 : 1;
+    push('drone', Math.round((7 + n) * eMul), 0.6);
+    push('sprinter', Math.round((4 + n) * eMul), 0.42, 3);
     if (n >= 6) push('tank', n - 5, 2.2, 6);
     if (n >= 7) push('shielder', n - 6, 1.8, 8);
   } else if (n <= 14) {
@@ -57,7 +60,9 @@ function bossWaveDelay(n) {
 }
 
 function campaignBossDelayHint(n) {
-  return n <= 5 ? 8 : n <= 15 ? 10 : 12;
+  // The first reaper enters after its escort has mostly spent the towers'
+  // attention, so a 6-tower line can still kill it; later bosses mix in.
+  return n <= 5 ? 10 : n <= 15 ? 11 : 13;
 }
 
 function endlessWave(n) {
@@ -83,10 +88,31 @@ export function waveGroups(n, endless) {
   return endless ? endlessWave(n) : campaignWave(n);
 }
 
-// HP scaling: gentle on campaign (capped), compounding in endless.
+// HP scaling: gentle through wave 8, steeper after (hpGrowthLate) so the
+// finale out-scales a maxed board; compounding further in endless.
 export function waveScale(n, endless) {
-  if (!endless) return 1 + Math.max(0, n - 1) * 0.06;
-  return (1 + (n - 1) * 0.06) * Math.pow(1 + WAVES_META.endlessHpGrowth, Math.max(0, n - WAVES_META.total));
+  const late = WAVES_META.hpGrowthLate || WAVES_META.hpGrowth;
+  const base = n <= 8
+    ? 1 + Math.max(0, n - 1) * WAVES_META.hpGrowth
+    : 1 + 7 * WAVES_META.hpGrowth + (n - 8) * late;
+  if (!endless) return base;
+  return base * Math.pow(1 + WAVES_META.endlessHpGrowth, Math.max(0, n - WAVES_META.total));
+}
+
+// Extra boss HP on top of waveScale, indexed by the boss appearance number
+// (waves 5/10/15/20 → WAVES_META.bossHpMult). Past the campaign the same
+// endlessHpGrowth compounds each further appearance.
+export function bossHpScale(n) {
+  const mults = WAVES_META.bossHpMult;
+  const appearance = Math.floor((n - 1) / WAVES_META.bossEvery); // 0-based
+  const base = mults[Math.min(appearance, mults.length - 1)];
+  return base * Math.pow(1 + WAVES_META.endlessHpGrowth, Math.max(0, appearance - (mults.length - 1)));
+}
+
+// Final HP multiplier for one spawn: bosses carry their appearance multiplier.
+export function enemyScale(n, type, endless) {
+  const s = waveScale(n, endless);
+  return ENEMIES[type] && ENEMIES[type].boss ? s * bossHpScale(n) : s;
 }
 
 // Expand groups into an ordered spawn schedule: [{at, type}], plus total duration.

@@ -104,10 +104,14 @@ export const ECONOMY = {
   startCore: 20,
   sellRatio: 0.6,
   waveBonus: (wave) => 18 + wave * 3,
+  // Early-start reward: keeps its weight in the early game (prep matters most
+  // before the wave-5 boss) and grows slowly with the wave so pressing "next
+  // wave" stays worth ~10% of the clear bonus late, too. Takes the wave that
+  // is about to start.
+  earlyWaveBonus: (wave) => 5 + Math.max(0, Math.floor((wave - 5) / 3)),
   // Tile-builder wave clock + piece queue.
   waveCountdownFirst: 15, // s before wave 1
   waveCountdown: 12, // s between waves
-  earlyWaveBonus: 5, // cash for starting a wave ahead of the timer
   pieceHandSize: 2, // queue/hand size
   firstWavePrepPieces: 2, // placements expected (auto-filled) before wave 1
 };
@@ -138,13 +142,13 @@ export const TOWERS = {
     desc: 'Slows enemies. Shatter damage on slowed.',
     cost: 55,
     upgradeCost: [0, 55, 95],
-    damage: [5, 8, 13],
+    damage: [5, 9, 14],
     range: [2.4, 2.7, 3.0],
     fireRate: [1.3, 1.5, 1.8],
     kind: 'projectile',
     projSpeed: 7,
-    slowFactor: [0.55, 0.48, 0.4],
-    slowTime: [1.4, 1.7, 2.0],
+    slowFactor: [0.55, 0.45, 0.36],
+    slowTime: [1.5, 1.8, 2.2],
   },
   arc: {
     key: 'arc',
@@ -168,8 +172,8 @@ export const TOWERS = {
     glyph: '➤',
     color: PALETTE.yellow,
     desc: 'Piercing hyper-velocity slug. Long range.',
-    cost: 95,
-    upgradeCost: [0, 90, 150],
+    cost: 100,
+    upgradeCost: [0, 95, 155],
     damage: [34, 55, 88],
     range: [4.4, 5.0, 5.6],
     fireRate: [0.45, 0.55, 0.68],
@@ -191,11 +195,11 @@ export const ENEMIES = {
     color: PALETTE.yellow, size: 0.2, shape: 'tri', armor: 0,
   },
   tank: {
-    key: 'tank', name: 'Hulk Tank', hp: 130, speed: 0.85, reward: 13, coreDmg: 2,
+    key: 'tank', name: 'Hulk Tank', hp: 130, speed: 0.85, reward: 14, coreDmg: 2,
     color: PALETTE.magenta, size: 0.36, shape: 'hex', armor: 2, slowResist: 0.5,
   },
   shielder: {
-    key: 'shielder', name: 'Shielder', hp: 70, speed: 1.15, reward: 11, coreDmg: 2,
+    key: 'shielder', name: 'Shielder', hp: 70, speed: 1.15, reward: 12, coreDmg: 2,
     color: PALETTE.green, size: 0.3, shape: 'square', armor: 5,
   },
   phantom: {
@@ -204,7 +208,7 @@ export const ENEMIES = {
     regen: 4, phaseEvery: 3.2, phaseTime: 0.7, // brief untargetable blink
   },
   boss: {
-    key: 'boss', name: 'GRID REAPER', hp: 650, speed: 0.72, reward: 70, coreDmg: 5,
+    key: 'boss', name: 'GRID REAPER', hp: 380, speed: 0.72, reward: 70, coreDmg: 4,
     color: PALETTE.danger, size: 0.46, shape: 'boss', armor: 4, slowResist: 0.5,
     boss: true,
   },
@@ -213,6 +217,24 @@ export const ENEMIES = {
 export const WAVES_META = {
   total: 20,
   bossEvery: 5,
+  // Campaign HP growth per wave. Gentle through wave 8 (the wave-5 boss is a
+  // knife-edge at 6-tower L1/L2 DPS), then steep (hpGrowthLate) so the finale
+  // demands a fully upgraded line against the maxed ~25-tower board.
+  hpGrowth: 0.105,
+  hpGrowthLate: 0.165,
+  // Speed pressure on top of hpGrowth: late walkers cross the lane faster,
+  // so tower exposure shrinks exactly when the board stops growing (0 ⇒ flat
+  // speed; +12% walk speed by wave 20).
+  speedGrowth: 0.12,
+  // Armor hardening: armored types gain flat armor with the wave scale, so a
+  // wall of Lv.1 chip towers stops chipping late (L-03's 10% floor still
+  // bounds it — armor never grants immunity, it just taxes under-upgraded
+  // boards). 0 ⇒ flat armor.
+  armorGrowth: 1.5,
+  // Per-boss-appearance HP multiplier (waves 5/10/15/20), on top of hpGrowth.
+  // The first boss must die before the core with a 6-tower L1/L2 line; each
+  // later reaper out-scales the player's natural power curve to stay a spike.
+  bossHpMult: [1, 1.6, 3.1, 4.5],
   // Speed & HP growth used by the endless generator past wave 20.
   endlessHpGrowth: 0.22,
   endlessCountGrowth: 0.12,

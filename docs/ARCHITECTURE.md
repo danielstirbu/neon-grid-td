@@ -8,8 +8,8 @@ Toate modulele sunt ES native (`<script type="module">`), fără bundler. Graful
 |---|---|---|---|
 | `www/js/config.js` | Constante de balans + date tile-builder (piese de drum, porturi, rotații) | `GRID`, `CORE_CELL`, `DIRS`, `rotDir()`, `opposite()`, `INITIAL_ROAD`, `TILE_PIECES`, `rotatePiece()`, `PALETTE`, `ECONOMY`, `TOWERS`, `TOWER_ORDER`, `ENEMIES`, `WAVES_META`, `TARGET_MODES`, `SPEED_OPTIONS`, `towerLevelStats()`, `towerInvested()` | — |
 | `www/js/pathfinding.js` | Rețeaua de drum (celule cu porturi) + flow-field BFS spre CORE + validări de plasare (turn și piese de drum) | `Pathfinder`: `recompute()`, `canPlace()`, `place()/remove()`, `isRoad()`, `isCore()`, `hasPort()`, `openEnds()`, `spawnCells()`, `isTipFront()`, `canPlaceRoadPiece()`, `placeRoadPiece()`, `findRoadPiecePlacement()`, `isReachableFromCore()`, `distAt()`, `nextStep()` | `config` (CORE_CELL, DIRS, INITIAL_ROAD, rotatePiece) |
-| `www/js/entities.js` | Stare și comportament pe entitate (fără canvas, fără DOM) | `Enemy`, `Tower`, `Projectile`, `Beam`, `Particle`, `FloatingText`, `burst()` (plafon `MAX_PARTICLES`) | `config` |
-| `www/js/waves.js` | Generare de valuri (campanie 20 + boss + endless) + coada de piese tile-builder (seeded, echilibrată 1+2 celule, garantată cu un colț, fără piese `branch`) | `waveGroups()`, `waveScale()`, `buildSchedule()`, `makePieceRng()`, `createPieceQueue()` | `config` (WAVES_META, TILE_PIECES) |
+| `www/js/entities.js` | Stare și comportament pe entitate (fără canvas, fără DOM); `Enemy(typeKey, hpScale, plainScale)` aplică scaling-ul de val: HP × `hpScale` (include multiplier-ul de boss), viteză/armură doar din `plainScale` (bossii nu sprintă și nu devin imuni din cauza propriului multiplier) | `Enemy`, `Tower`, `Projectile`, `Beam`, `Particle`, `FloatingText`, `burst()` (plafon `MAX_PARTICLES`) | `config` |
+| `www/js/waves.js` | Generare de valuri (campanie 20 + boss + endless) + curba de dificultate (HP/speed/armură/boss per val) + coada de piese tile-builder (seeded, echilibrată 1+2 celule, garantată cu un colț, fără piese `branch`) | `waveGroups()`, `waveScale()`, `bossHpScale()`, `enemyScale()`, `buildSchedule()`, `makePieceRng()`, `createPieceQueue()` | `config` (WAVES_META, ENEMIES, TILE_PIECES) |
 | `www/js/audio.js` | Sinteză procedurală Web Audio: 16 SFX + BGM pe 3 mode | singleton `audio`: `unlock()`, `play(name)`, `setEnabled()`, `setMusicMode(mode)` | — |
 | `www/js/toon.js` | Artă procedurală (personaje, turnuri, text), cache de gradiente | `drawToonEnemy()`, `drawToonTower()`, `toonText()`, `clearGradCache()`, helpers `rr/roundPoly/bodyPath/eyes/lighten/darken` | `config.PALETTE` |
 | `www/js/landscape.js` | Fundal procedural pre-randat o singură dată pe resize | `Landscape.build(w,h,dpr,avoid)`, `.layer` (canvas offscreen) | — |
@@ -65,6 +65,13 @@ document.visibilitychange → auto-pauză + overlay de resume
 ```
 
 `UI` citește din `Game`, nu scrie în el decât prin metode publice. `Game` nu atinge niciodată `innerHTML` — toate nodurile DOM se construiesc prin `document.createElement` și `textContent`.
+
+## Economie și balans
+
+- **Venit pe val** = recompensele inamicilor uciși (`ENEMIES[x].reward`, nescalați cu HP-ul) + `ECONOMY.waveBonus(wave)` (parabolic lin, ¤21→78) + `ECONOMY.earlyWaveBonus(wave)` (base 5, +1 la fiecare 3 valuri, ~10% din bonus în late). Valul 5 are escortă mai ușoară (`×0.72`) ca boss-ul să fie amenințarea, nu furnicarul.
+- **Cheltuiala** = `TOWERS[x].cost` + `upgradeCost[1..2]`; refund la vânzare = `floor(invested × ECONOMY.sellRatio)` (L-08, nicăieri litereale). Raport cost→DPS per turn e calibrat să facă rail (¤100) strongest-per-slot dar pulse (¤40) rentabil în early; cryo e utilitate (slow), nu DPS.
+- **Curba de dificultate** (`WAVES_META`): HP `×(1 + 0.105·min(wave-1,7) + 0.165·max(0,wave-8))` ⇒ ~×3.7 la valul 20; `speedGrowth` +12% viteză de mers (expunere mai mică sub turnuri); `armorGrowth` +~1 armură/orizontală la tipurile armate (taxează chip-urile de Lv.1, nu imunitate — plafonul proporțional L-03 rămâne). Boss: `bossHpMult` per apariție `[1,1.6,3.1,4.5]` aplicat **peste** HP-scale, `coreDmg` 4.
+- **Verificare**: un sim headless (creat temporar, apoi șters din arbore) rulează campania 1–20 cu un bot „expert" (acțiuni multe, rezervă 0) și unul „casual" (2 acțiuni/val, rezervă 40). Ținte: expertul trece 20/20 cu bossii murind undeva pe traseu (die% 40–70), casualul abia supraviețuiește (bossii scurg spre final), niciun val ≥3 scurgeri non-boss. Balanța se ajustează în `config.js`/`waves.js`, nu în `main.js`.
 
 ## Reguli de modularitate (cum adaugi ceva fără cuplaj)
 
