@@ -24,6 +24,7 @@ class Game {
     this.pointerDown = null;
     this.lastTime = performance.now();
     this.resetRun();
+    audio.setMusicMode('menu');
 
     this._bindInput();
     // P-07: named handlers so destroy() can detach every global listener.
@@ -38,6 +39,7 @@ class Game {
           this.autoPaused = true; // remember it was automatic
           this.ui.showPauseOverlay();
           this.requestRender();
+          this._syncMusic();
         }
       } else if (this.autoPaused) {
         this.autoPaused = false;
@@ -68,6 +70,7 @@ class Game {
 
   destroy() {
     this._running = false;
+    audio.setMusicMode('off');
     window.removeEventListener('resize', this._onResize);
     document.removeEventListener('visibilitychange', this._onVisibility);
     window.removeEventListener('keydown', this._onKey);
@@ -100,6 +103,17 @@ class Game {
     this.ui.clearTowerSelect();
   }
 
+  // BGM follows the state machine: menu theme in the menu, driving arp while
+  // playing (hotter variant on boss waves), silence while paused/over.
+  _syncMusic() {
+    if (this.state !== 'playing' || this.paused) {
+      audio.setMusicMode(this.state === 'menu' ? 'menu' : 'off');
+      return;
+    }
+    const isBoss = this.waveActive && this.wave > 0 && this.wave % WAVES_META.bossEvery === 0;
+    audio.setMusicMode(isBoss ? 'boss' : 'game');
+  }
+
   begin(endless) {
     this.endless = endless;
     this.resetRun();
@@ -108,6 +122,7 @@ class Game {
     this.ui.hideOver();
     this.requestRender();
     audio.play('wave');
+    this._syncMusic();
   }
 
   retry() {
@@ -119,6 +134,7 @@ class Game {
     this.resetRun();
     this.ui.showStart();
     this.requestRender();
+    this._syncMusic();
   }
 
   togglePause() {
@@ -129,6 +145,7 @@ class Game {
     else this.ui.hidePauseOverlay();
     this.requestRender();
     audio.play('tap');
+    this._syncMusic();
   }
 
   toggleSpeed() {
@@ -157,6 +174,7 @@ class Game {
     const isBoss = this.wave % WAVES_META.bossEvery === 0;
     this.ui.showBanner(isBoss ? `⚠ WAVE ${this.wave} — BOSS ⚠` : `WAVE ${this.wave}`);
     audio.play(isBoss ? 'boss' : 'wave');
+    this._syncMusic();
     this.ui.vibrate(isBoss ? [40, 60, 40] : 15);
   }
 
@@ -178,6 +196,7 @@ class Game {
       this.cash += bonus;
       this.floaters.push(new FloatingText(GRID.core.col + 0.5, GRID.core.row, `+¤${bonus}`, PALETTE.yellow, 0.55));
       if (!this.endless && this.wave >= this.totalWaves) return this.victory();
+      this._syncMusic(); // boss wave cleared → drop back to the normal theme
     } else if (ev.length === 0 && this.spawnClock > this.schedule.duration + 30) {
       // Failsafe (L-02): a stuck enemy must never leave the wave — and the NEXT
       // WAVE button — locked forever. Remove stragglers (zero reward, no leak
@@ -292,6 +311,7 @@ class Game {
     this.state = 'over';
     this.requestRender();
     audio.play('victory');
+    this._syncMusic();
     this.ui.showOver('GRID SECURED', `All ${this.totalWaves} waves repelled. Core integrity ${this.core}/${ECONOMY.startCore}.`);
   }
 
@@ -299,6 +319,7 @@ class Game {
     this.state = 'over';
     this.requestRender();
     audio.play('defeat');
+    this._syncMusic();
     this.ui.vibrate([60, 50, 60, 50, 120]);
     this.ui.showOver('GRID BREACHED', `The core fell on wave ${this.wave}.`);
   }

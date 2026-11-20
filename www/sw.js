@@ -1,5 +1,5 @@
 /* Neon Grid TD service worker — cache-first, 100% offline after first load. */
-const CACHE = 'neon-grid-td-v6';
+const CACHE = 'neon-grid-td-v7';
 
 const PRECACHE = [
   './',
