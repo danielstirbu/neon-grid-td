@@ -111,11 +111,6 @@ export class UI {
     }
   }
 
-  clearPieceSelect() {
-    if (this.game) this.game.selectedPiece = null;
-    for (const entry of this.pieceCards) entry.card.classList.remove('selected');
-  }
-
   _bind() {
     const { els } = this;
     els.nextWave.addEventListener('pointerdown', (e) => {

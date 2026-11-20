@@ -116,7 +116,9 @@ class Game {
     this.countdownArmed = true;
     this.selectedPiece = null; // index into roadHand, or null
     this.pieceRotation = 0;
-    this.ui.clearPieceSelect();
+    this.piecePreview = null;
+    this.hoverCell = null;
+    this.ui.refreshPieceDock(this);
     this.ui.closeTowerMenuSilent();
     this.ui.clearTowerSelect();
   }
@@ -680,10 +682,18 @@ class Game {
       this.requestRender();
     };
     this._onPointerCancel = () => { this.pointerDown = null; };
+    // F2b: the ghost preview must vanish when the cursor leaves the stage.
+    this._onPointerLeave = () => {
+      this.hoverCell = null;
+      this.hover = null;
+      this.piecePreview = null;
+      if (this.paused) this.requestRender();
+    };
     c.addEventListener('pointerdown', this._onPointerDown);
     c.addEventListener('pointermove', this._onPointerMove);
     c.addEventListener('pointerup', this._onPointerUp);
     c.addEventListener('pointercancel', this._onPointerCancel);
+    c.addEventListener('pointerleave', this._onPointerLeave);
   }
 
   _unbindInput() {
@@ -692,6 +702,7 @@ class Game {
     c.removeEventListener('pointermove', this._onPointerMove);
     c.removeEventListener('pointerup', this._onPointerUp);
     c.removeEventListener('pointercancel', this._onPointerCancel);
+    c.removeEventListener('pointerleave', this._onPointerLeave);
   }
 
   handleTap(col, row) {

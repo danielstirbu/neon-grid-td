@@ -102,21 +102,85 @@ async function runViewport(browser, vp) {
   ok(blockade.placed === 3 && !blockade.roadCell && blockade.connected,
     `road can never be blocked (platforms=${blockade.placed}/3, road refused=${!blockade.roadCell}, portal reachable=${blockade.connected})`);
 
-  // Start wave 1: enemies spawn and follow the BFS path.
+  // F2b dock: two road-piece cards, ROTATE (button + R key), wave countdown label.
+  const dock = await page.evaluate(() => ({
+    cards: document.querySelectorAll('#piece-cards .piece-card').length,
+    glyph: document.querySelector('#piece-cards .piece-card .glyph').textContent.trim(),
+    rotateDisabled: document.getElementById('btn-rotate').disabled,
+    next: document.getElementById('btn-next-wave').textContent,
+    hand: window.game.roadHand.length,
+  }));
+  ok(dock.cards === 2 && dock.hand === 2 && dock.glyph.length > 0 && dock.rotateDisabled,
+    `piece dock shows 2 queued pieces, ROTATE disabled with no selection (cards=${dock.cards}, glyph=${dock.glyph})`);
+  ok(/^NEXT WAVE IN \d+s/.test(dock.next), `wave countdown label on the wave button ("${dock.next}")`);
+
+  await page.click('#piece-cards .piece-card');
+  await page.keyboard.press('r');
+  const rot = await page.evaluate(() => ({
+    sel: window.game.selectedPiece,
+    rot: window.game.pieceRotation,
+    rotateDisabled: document.getElementById('btn-rotate').disabled,
+  }));
+  ok(rot.sel === 0 && rot.rot === 1 && !rot.rotateDisabled,
+    `piece card selects and R rotates it (selected=${rot.sel}, rotation=${rot.rot}, ROTATE enabled)`);
+  await page.click('#btn-rotate');
+  ok(await page.evaluate(() => window.game.pieceRotation === 2), 'ROTATE button advances the rotation');
+
+  // Ghost preview: cyan/valid over a legal open-end spot, red/invalid over the
+  // core, and gone once the pointer leaves the stage.
+  const spot = await page.evaluate(async () => {
+    const { TILE_PIECES } = await import('/js/config.js');
+    const g = window.game;
+    return g.path.findRoadPiecePlacement(TILE_PIECES[g.roadHand[g.selectedPiece]], new Set());
+  });
+  ok(spot !== null, 'a legal road-piece placement exists for the selected piece');
+  for (let i = 0; i < 4 && await page.evaluate((r) => window.game.pieceRotation !== r, spot.rotation); i++) {
+    await page.keyboard.press('r');
+  }
+  const sp = await cellPoint(spot.origin.col, spot.origin.row);
+  await page.mouse.move(sp.x, sp.y);
+  const ghostOk = await page.evaluate(() => window.game.piecePreview);
+  ok(ghostOk && ghostOk.valid, 'ghost preview is valid over a legal cell');
+  const cp = await cellPoint(4, 7); // CORE cell
+  await page.mouse.move(cp.x, cp.y);
+  const ghostBad = await page.evaluate(() => window.game.piecePreview);
+  ok(ghostBad && !ghostBad.valid, 'ghost preview turns invalid over an illegal cell');
+  await page.mouse.move(sp.x, 4); // leave the canvas
+  ok(await page.evaluate(() => window.game.piecePreview === null), 'ghost preview clears when the pointer leaves the grid');
+  await page.keyboard.press('Escape');
+
+  // Start wave 1: enemies spawn on a live SPAWN portal and follow the BFS flow field.
   await page.click('#btn-next-wave');
   await page.waitForTimeout(1400);
   const wave = await page.evaluate(() => {
     const g = window.game;
-    const portal = g.path.spawnCells()[0];
     return {
       active: g.waveActive,
       count: g.enemies.length,
-      onPortal: g.enemies.every((e) => Math.floor(e.x) === portal.col),
-      moved: g.enemies.some((e) => e.y > portal.row + 0.5),
+      onRoad: g.enemies.length > 0 && g.enemies.every((e) =>
+        g.path.isRoad(Math.floor(e.x), Math.floor(e.y)) &&
+        g.path.distAt(Math.floor(e.x), Math.floor(e.y)) >= 0),
     };
   });
   ok(wave.active && wave.count > 0, `wave 1 started with ${wave.count} enemies`);
-  ok(wave.onPortal && wave.moved, 'enemies spawn at the open-end portal and move along the BFS path');
+  ok(wave.onRoad, 'every enemy walks a connected road cell toward the core');
+  // Tag the leading enemy; if it dies or leaks it advanced, if it is still
+  // alive its BFS distance to the core must have dropped. (A plain list scan
+  // is flaky: new spawns queue up behind the portal during the wait window.)
+  const probe = await page.evaluate(() => {
+    const e = window.game.enemies[0];
+    if (!e) return null;
+    e.__probeD = window.game.path.distAt(Math.floor(e.x), Math.floor(e.y));
+    return e.__probeD;
+  });
+  await page.waitForTimeout(700);
+  const moved = await page.evaluate((d0) => {
+    const g = window.game;
+    if (d0 === null) return true;
+    const e = g.enemies.find((x) => x.__probeD !== undefined);
+    return !e || g.path.distAt(Math.floor(e.x), Math.floor(e.y)) < d0;
+  }, probe);
+  ok(moved, 'enemies advance along the BFS path (distance to core decreases)');
 
   // Towers engage within a couple of seconds.
   await page.waitForTimeout(2200);
@@ -126,12 +190,14 @@ async function runViewport(browser, vp) {
   });
   ok(combat.fx > 0 || combat.anyDamaged, 'towers engage enemies (VFX/damage observed)');
 
-  // Speed + pause buttons respond.
+  // Speed + pause buttons respond; the resume button on the pause overlay
+  // (the overlay covers the HUD) un-pauses the run.
   await page.click('#btn-speed');
   await page.click('#btn-pause');
   const flags = await page.evaluate(() => ({ s: window.game.speedIndex, p: window.game.paused }));
   ok(flags.s === 1 && flags.p === true, 'speed and pause HUD buttons work');
-  await page.click('#btn-pause');
+  await page.click('#btn-resume');
+  ok(await page.evaluate(() => !window.game.paused), 'resume button on the pause overlay un-pauses');
 
   // Tap the placed tower -> contextual menu (upgrade / target / sell).
   const tp = await cellPoint(2, 5);

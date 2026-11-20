@@ -13,8 +13,8 @@ Toate modulele sunt ES native (`<script type="module">`), fără bundler. Graful
 | `www/js/audio.js` | Sinteză procedurală Web Audio: 16 SFX + BGM pe 3 mode | singleton `audio`: `unlock()`, `play(name)`, `setEnabled()`, `setMusicMode(mode)` | — |
 | `www/js/toon.js` | Artă procedurală (personaje, turnuri, text), cache de gradiente | `drawToonEnemy()`, `drawToonTower()`, `toonText()`, `clearGradCache()`, helpers `rr/roundPoly/bodyPath/eyes/lighten/darken` | `config.PALETTE` |
 | `www/js/landscape.js` | Fundal procedural pre-randat o singură dată pe resize | `Landscape.build(w,h,dpr,avoid)`, `.layer` (canvas offscreen) | — |
-| `www/js/renderer.js` | Punerea entităților pe canvas; board offscreen (drum + porturi randate din network); sprite-uri de glow | `Renderer`: `setNetwork()`, `resize()`, `_buildBoard()`, `toGrid()`, `sx()/sy()`, `begin()`, `drawGrid/Tower/Enemy/Projectile/Beam/Particle/FloatingText/Range/Selected` | `config`, `toon`, `landscape` |
-| `www/js/ui.js` | HUD, dock de turnuri, meniu contextual, toast/banner, vibrații | `UI`: `updateHUD()` (dirty-check), `toggleTowerSelect()`, `openTowerMenu()/refreshTowerMenu()/closeTowerMenu()`, `showStart/Over/PauseOverlay()`, `toast()`, `vibrate()` | `config`, `audio` |
+| `www/js/renderer.js` | Punerea entităților pe canvas; board offscreen (drum + porturi randate din network); sprite-uri de glow | `Renderer`: `setNetwork()`, `resize()`, `_buildBoard()`, `toGrid()`, `sx()/sy()`, `begin()`, `drawGrid/Tower/Enemy/Projectile/Beam/Particle/FloatingText/Range/Selected`, `drawPieceGhost()` (preview fantomă, fill/stroke plate — P-03/P-06) | `config`, `toon`, `landscape` |
+| `www/js/ui.js` | HUD, dock de turnuri, dock de piese de drum (2 carduri + ROTATE), meniu contextual, toast/banner, vibrații | `UI`: `updateHUD()` (dirty-check), `refreshPieceDock()`, `toggleTowerSelect()`, `openTowerMenu()/refreshTowerMenu()/closeTowerMenu()`, `showStart/Over/PauseOverlay()`, `toast()`, `vibrate()` | `config`, `audio` |
 | `www/js/main.js` | Orchestrare: buclă, state machine, input, combat, economie, mâna de piese + countdown-ul automat de val | `Game`: `begin()`, `retry()`, `toMenu()`, `togglePause/Speed/Sound()`, `startNextWave()`, `tryPlaceTower()`, `placeRoadPiece()`, `selectPiece()`, `rotateSelectedPiece()`, `updateWaveCountdown()`, `repath()/repathAll()`, `fireTower()`, `frame()/step()/render()`, `destroy()` | toate de mai sus |
 | `www/js/boot.js` | Înregistrarea service worker-ului (fișier separat cere CSP `script-src 'self'`) | — | — |
 | `www/sw.js` | Cache-first, offline complet; navigare network-first cu fallback | `CACHE` (versiune), `PRECACHE` | — |
@@ -32,7 +32,7 @@ requestAnimationFrame ──► frame(now)
 
 `step(dt)` în ordine: `updateWaveCountdown` (ceasul automat dintre valuri: `15 s` înainte de valul 1, `12 s` între valuri, armat doar între valuri ⇒ `paused` / `visibilitychange` îl îngheață gratuit; la expirare `startNextWave()` își auto-plasează piesele restante cu `findRoadPiecePlacement()`) → `updateWave` (spawn din `schedule`) → `fireTower` per turn → `Enemy.update` → `Projectile.update` → `Beam.update` → colectare kills/leaks (cash, `FloatingText`, `burst`, `audio.play`, `core`) → filtrare liste moarte → `Particle`/`FloatingText`.
 
-`render()` în ordine: `begin()` (landscape + fundal) → `drawGrid` (board pre-randat + hover) → `drawRange` → `drawSelected` → turnuri → beams → inamici (**cu viewport culling**, P-10) → proiectile → particule → floating text.
+`render()` în ordine: `begin()` (landscape + fundal) → `drawGrid` (board pre-randat + hover) → `drawRange` → `drawSelected` → `drawPieceGhost` (preview-ul piesei selectate, cyan valid / roșu invalid) → turnuri → beams → inamici (**cu viewport culling**, P-10) → proiectile → particule → floating text.
 
 ## Coordonate și pathfinding
 
@@ -49,13 +49,17 @@ requestAnimationFrame ──► frame(now)
 
 ```
 pointerdown (canvas) → audio.unlock() + pointerDown + setPointerCapture
-pointermove          → renderer.toGrid() → ui.selectedTowerKey ? hover{col,row,valid} : null
+pointermove          → renderer.toGrid() → hoverCell; ui.selectedTowerKey ? hover{col,row,valid} : null
+                                                        selectedPiece !== null → _updatePiecePreview()
+pointerleave         → hoverCell/hover/piecePreview → null (fantomă vizibilă doar sub cursor)
 pointerup            → deplasare ≤ 24px && state==='playing' → Game.handleTap(col,row)
+                                                        ├─ selectedPiece       → tryPlaceSelectedPiece()
                                                         ├─ ui.selectedTowerKey → tryPlaceTower()
                                                         ├─ turn at (col,row)   → ui.openTowerMenu()
                                                         └─ altfel              → closeTowerMenu()
-keydown (1-4 / space / p / n / Escape) → select turn / pause / wave / escape
+keydown (1-4 / space / p / n / r / Escape) → select turn / pause / wave / rotate piece / escape
 HUD buttons (ui._bind) → Game.togglePause|toggleSpeed|toggleSound|startNextWave|retry|toMenu
+piece dock (ui._buildPieceDock) → card → Game.selectPiece(i) (a 2-a atingere rotește); ROTATE → Game.rotateSelectedPiece()
 document.visibilitychange → auto-pauză + overlay de resume
 ```
 
