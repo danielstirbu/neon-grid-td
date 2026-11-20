@@ -217,19 +217,33 @@ class Game {
   }
 
   // Auto-place every pending piece in the hand; returns the cells added.
+  // Tries each card in turn — the strict single-chain rule can leave one piece
+  // unplaceable at the current tip while another still fits. If the whole
+  // hand is dead, the refill reroll gets one more chance before giving up.
   _autoPlacePending() {
     const cells = [];
+    let rerolled = false;
     while (this.pendingPieces > 0 && this.roadHand.length > 0) {
-      const piece = TILE_PIECES[this.roadHand[0]];
-      // Never build under a live walker (L-11 mirror for auto-placement).
-      const spot = this.path.findRoadPiecePlacement(piece, this._enemyCells());
-      if (!spot) {
-        this.ui.toast('NO ROOM FOR ROAD');
-        break;
+      const occupied = this._enemyCells();
+      let spot = null;
+      let handIdx = -1;
+      for (let i = 0; i < this.roadHand.length; i++) {
+        const found = this.path.findRoadPiecePlacement(TILE_PIECES[this.roadHand[i]], occupied);
+        if (found) { spot = found; handIdx = i; break; }
       }
-      const res = this.path.placeRoadPiece(piece, spot.origin, spot.rotation);
+      if (!spot) {
+        const before = this.roadHand.join();
+        this._ensurePlayableHand();
+        if (rerolled || this.roadHand.join() === before) {
+          this.ui.toast('NO ROOM FOR ROAD');
+          break;
+        }
+        rerolled = true;
+        continue;
+      }
+      const res = this.path.placeRoadPiece(TILE_PIECES[this.roadHand[handIdx]], spot.origin, spot.rotation);
       if (!res.ok) break;
-      this.roadHand.shift();
+      this.roadHand.splice(handIdx, 1);
       this.pendingPieces -= 1;
       cells.push(...res.cells);
     }
@@ -254,17 +268,55 @@ class Game {
     this.countdownArmed = true;
   }
 
-  // Keep the hand at ECONOMY.pieceHandSize with an even size mix: every new
-  // draw is the opposite size of the piece that stayed in the hand.
+  // Keep the hand at ECONOMY.pieceHandSize with an even size mix: the hand
+  // must always hold at least one 1-cell and one 2-cell piece AND at least one
+  // corner piece (Turn / L-Bend). Two collinear pieces (Straight + Long)
+  // cannot turn a tip whose front touches a wall — under the strict
+  // single-path rule that is a dead hand, so the corner guarantee wins over
+  // the size mix.
   _refillHand() {
+    const corner = (k) => k === 'SINGLE_TURN' || k === 'DOUBLE_L';
     while (this.roadHand.length < ECONOMY.pieceHandSize) {
       const [one, two] = createPieceQueue(this.pieceRng);
-      const lastSize = this.roadHand.length
-        ? TILE_PIECES[this.roadHand[this.roadHand.length - 1]].size
-        : 2;
-      this.roadHand.push(lastSize === 1 ? one : two);
+      const has1 = this.roadHand.some((k) => TILE_PIECES[k].size === 1);
+      const has2 = this.roadHand.some((k) => TILE_PIECES[k].size === 2);
+      const want = !has1 ? one
+        : !has2 ? two
+          : TILE_PIECES[this.roadHand[this.roadHand.length - 1]].size === 1 ? two : one;
+      let key = want;
+      if (!corner(want) && !this.roadHand.some(corner)) {
+        const partner = want === one ? two : one;
+        key = corner(partner) ? partner
+          : TILE_PIECES[want].size === 1 ? 'SINGLE_TURN' : 'DOUBLE_L';
+      }
+      this.roadHand.push(key);
     }
     this.roadHand.length = ECONOMY.pieceHandSize;
+    this._ensurePlayableHand();
+  }
+
+  // Dead-hand guard: under the strict single-chain rule the road only grows
+  // at the tip, so a hand of collinear pieces facing a wall-front is
+  // unplayable (e.g. Straight + Long at a corner). When NO card fits the
+  // current tip, reroll one card into a piece that does — corner first, since
+  // tips beside a wall always need a TURN — keeping the 1+2 size mix when
+  // possible, so neither the player nor the auto-placer can be locked with an
+  // impossible hand.
+  _ensurePlayableHand() {
+    if (this.state !== 'playing' || this.roadHand.length === 0) return;
+    const fits = (k) => this.path.findRoadPiecePlacement(TILE_PIECES[k]) !== null;
+    if (this.roadHand.some(fits)) return;
+    const swap = ['SINGLE_TURN', 'DOUBLE_L', 'SINGLE_STRAIGHT', 'DOUBLE_STRAIGHT']
+      .find((k) => fits(k));
+    if (!swap) return; // tip walled in on every side — nothing can fit anywhere
+    const size = TILE_PIECES[swap].size;
+    const i = this.roadHand.findIndex((k) => TILE_PIECES[k].size === size);
+    this.roadHand[i < 0 ? 0 : i] = swap;
+    this.clearPieceSelect();
+    audio.play('tap');
+    this.ui.toast(`HAND REROLL — ${TILE_PIECES[swap].name.toUpperCase()}`);
+    this.ui.refreshPieceDock(this);
+    this.requestRender();
   }
 
   // Auto-wave clock: only advances between waves while un-paused, so pause
@@ -449,6 +501,14 @@ class Game {
       this.ui.vibrate(30);
       return false;
     }
+    // The cell directly in front of the SPAWN tip is where the road continues:
+    // a tower there can never be built over and locks the chain forever.
+    if (this.path.isTipFront(col, row)) {
+      audio.play('deny');
+      this.ui.toast('ROAD CONTINUES HERE');
+      this.ui.vibrate(30);
+      return false;
+    }
     // L-11: refuse to build on top of a walking enemy.
     const occupied = this.enemies.some(
       (e) => !e.dead && !e.reachedCore && Math.floor(e.x) === col && Math.floor(e.y) === row
@@ -482,6 +542,7 @@ class Game {
     this.ui.vibrate(12);
     burst(this.particles, col + 0.5, row + 0.5, def.color, 8, 1.6, 0.4);
     if (this.cash < def.cost) this.ui.clearTowerSelect();
+    this._ensurePlayableHand();
     return true;
   }
 

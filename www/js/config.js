@@ -62,10 +62,11 @@ export const TILE_PIECES = {
     cells: [{ c: 0, r: 0 }, { c: 0, r: 1 }], ports: [[1, 2], [0, 2]],
   },
   // Stem cell carries the through N–S line plus one E branch; the tip cell
-  // extends the branch (W–E) and dangles E. Placed with its S port on an open
-  // end it keeps the line going (N) AND opens a second SPAWN portal at E.
+  // extends the branch (W–E) and dangles E. Branches are illegal under the
+  // strict single-path rule (two dangling ports = dead-end fork), so this
+  // piece is flagged `branch` and never dealt by createPieceQueue().
   DOUBLE_T: {
-    name: 'T-Joint', glyph: '┣', size: 2, cost: 0,
+    name: 'T-Joint', glyph: '┣', size: 2, cost: 0, branch: true,
     cells: [{ c: 0, r: 0 }, { c: 1, r: 0 }], ports: [[0, 1, 2], [3, 1]],
   },
 };

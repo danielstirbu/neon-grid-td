@@ -97,10 +97,10 @@ export class Pathfinder {
     return ends;
   }
 
-  // The single live SPAWN portal: the open end with the greatest BFS distance
-  // from the core, ties won by a cell of the most recently placed piece. A
-  // T-junction may leave extra dangling ports, but they read as normal road —
-  // enemies always enter through this one tip.
+  // The single live SPAWN portal: the tip of the one SPAWN→CORE chain. Under
+  // the strict extension rule the network is always a single path with exactly
+  // one open end, so that tip IS the spawn; the max-distance scan is only a
+  // belt-and-braces guard.
   spawnCells() {
     const ends = this.openEnds();
     if (ends.length === 0) return [];
@@ -120,11 +120,59 @@ export class Pathfinder {
     return [best];
   }
 
+  // Topology guard: the road must stay a single continuous chain from the one
+  // SPAWN tip to CORE. Exactly ONE dangling port exists on the whole network
+  // (a cell with two is a fork/dead end — openEnds() alone would undercount
+  // it because it breaks on the first dangling port), its front cell is a free
+  // platform inside the grid (a tip facing a wall or a tower could never be
+  // extended again — a road lock), every road cell is reachable, and there is
+  // one matching connection per road cell (edges == cells ⇔ tree: no loops;
+  // with ≤1 dangling this rules out branches and dead ends alike).
+  _isSingleChain() {
+    let dangling = 0;
+    let edges = 0;
+    for (const cell of this.cells.values()) {
+      if (this.dist[this.idx(cell.col, cell.row)] < 0) return false;
+      for (let d = 0; d < 4; d++) {
+        if (!this.hasPort(cell.col, cell.row, d)) continue;
+        const nx = cell.col + DIRS[d].dx;
+        const ny = cell.row + DIRS[d].dy;
+        if (this.isCore(nx, ny)) { edges++; continue; }
+        if (this.isRoad(nx, ny)) {
+          if (d < 2 && this.hasPort(nx, ny, opposite(d))) edges++;
+        } else {
+          if (!this.inBounds(nx, ny) || this.isBlocked(nx, ny)) return false;
+          dangling++;
+        }
+      }
+    }
+    return dangling === 1 && edges === this.cells.size;
+  }
+
+  // The front cell(s) of the tip's dangling port: the exact cell the next road
+  // piece must occupy to keep extending the chain. A tower there locks the
+  // road forever, so platforms in front of the SPAWN are not buildable.
+  isTipFront(col, row) {
+    const spawn = this.spawnCells()[0];
+    if (!spawn) return false;
+    for (let d = 0; d < 4; d++) {
+      if (!this.hasPort(spawn.col, spawn.row, d)) continue;
+      const nx = spawn.col + DIRS[d].dx;
+      const ny = spawn.row + DIRS[d].dy;
+      if (this.isRoad(nx, ny) || this.isCore(nx, ny)) continue;
+      if (col === nx && row === ny) return true;
+    }
+    return false;
+  }
+
   // Validate a road piece (TILE_PIECES entry) at origin with rot quarter-turns.
-  // Rules: every cell in-bounds and free (no core, no road, no tower); every
-  // external port must face an empty cell (new open end) or connect
-  // reciprocally to existing road/core; at least one port must join an
-  // existing open end, so the piece always extends a continuous path to CORE.
+  // Strict single-path rule: every cell in-bounds and free (no core, no road,
+  // no tower); internal joints and external ports must match reciprocally; the
+  // piece must EXTEND THE CURRENT SPAWN TIP — one of its cells sits exactly in
+  // front of the spawn's dangling port and exposes the reciprocal port there,
+  // consuming it; and after a simulated placement the network must still be a
+  // single SPAWN→CORE chain (_isSingleChain). Lateral T-junctions, side
+  // branches and dead ends are refused, so SPAWN never jumps sideways.
   canPlaceRoadPiece(piece, originCell, rotation) {
     const placed = rotatePiece(piece, rotation);
     const abs = placed.cells.map(({ col, row }) => ({
@@ -138,8 +186,6 @@ export class Pathfinder {
       if (this.isRoad(c.col, c.row)) return { ok: false, reason: 'CELL OCCUPIED' };
       if (this.isBlocked(c.col, c.row)) return { ok: false, reason: 'TOWER IN CELL' };
     }
-    const openEndKeys = new Set(this.openEnds().map((c) => this.idx(c.col, c.row)));
-    let joinsOpenEnd = false;
     for (let i = 0; i < abs.length; i++) {
       const c = abs[i];
       for (const d of placed.ports[i]) {
@@ -154,20 +200,44 @@ export class Pathfinder {
           }
           continue;
         }
-        if (this.isRoad(nx, ny) || this.isCore(nx, ny)) {
-          if (!this.hasPort(nx, ny, opposite(d))) return { ok: false, reason: 'PORT MISMATCH' };
-          if (openEndKeys.has(nIdx)) joinsOpenEnd = true;
+        if ((this.isRoad(nx, ny) || this.isCore(nx, ny)) && !this.hasPort(nx, ny, opposite(d))) {
+          return { ok: false, reason: 'PORT MISMATCH' };
         }
-        // facing an empty cell: dangling port -> new open end, allowed
+        // facing an empty cell: dangling port -> potential new tip, checked below
       }
     }
-    if (!joinsOpenEnd) return { ok: false, reason: 'MUST CONNECT TO AN OPEN END' };
+    // The piece must sit in front of the current spawn's dangling port and
+    // connect to it reciprocally — i.e. it extends the chain, nothing else.
+    const spawn = this.spawnCells()[0];
+    if (!spawn) return { ok: false, reason: 'NO SPAWN TIP' };
+    let extendsSpawn = false;
+    for (let d = 0; d < 4; d++) {
+      if (!this.hasPort(spawn.col, spawn.row, d)) continue;
+      const nx = spawn.col + DIRS[d].dx;
+      const ny = spawn.row + DIRS[d].dy;
+      if (this.isRoad(nx, ny) || this.isCore(nx, ny)) continue; // not dangling
+      const j = abs.findIndex((p) => p.col === nx && p.row === ny);
+      if (j >= 0 && placed.ports[j].includes(opposite(d))) { extendsSpawn = true; break; }
+    }
+    if (!extendsSpawn) return { ok: false, reason: 'MUST EXTEND THE SPAWN TIP' };
+    // Simulate the placement and verify the result stays a single chain.
+    for (let i = 0; i < abs.length; i++) this._addRoad(abs[i].col, abs[i].row, placed.ports[i]);
+    this.recompute();
+    const chainOk = this._isSingleChain();
+    for (const c of abs) {
+      const i = this.idx(c.col, c.row);
+      this.road[i] = 0;
+      this.ports[i] = 0;
+      this.cells.delete(i);
+    }
+    this.recompute();
+    if (!chainOk) return { ok: false, reason: 'BREAKS THE SPAWN-CORE PATH' };
     return { ok: true, cells: abs, ports: placed.ports };
   }
 
-  // Place a validated piece: extend the network and recompute the flow-field.
-  // The single SPAWN portal moves automatically — it is derived from openEnds()
-  // and the just-placed cells win distance ties, so the tip stays at the front.
+  // Place a validated piece: extend the chain and recompute the flow-field.
+  // The single SPAWN portal moves to the new tip automatically; the old tip
+  // becomes a normal road cell.
   placeRoadPiece(piece, originCell, rotation) {
     const check = this.canPlaceRoadPiece(piece, originCell, rotation);
     if (!check.ok) return check;

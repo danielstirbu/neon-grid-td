@@ -123,10 +123,19 @@ export function makePieceRng(seed) {
 // queue is always an even mix and road growth keeps pace with the wave clock.
 // Deterministic for a seeded rng.
 const PIECE_KEYS = Object.keys(TILE_PIECES);
-const SIZE1_KEYS = PIECE_KEYS.filter((k) => TILE_PIECES[k].size === 1);
-const SIZE2_KEYS = PIECE_KEYS.filter((k) => TILE_PIECES[k].size === 2);
+// Branch pieces (T-Joint) can never satisfy the strict single SPAWN→CORE
+// chain rule, so they are never dealt into the hand — only smoke/bot probes.
+const USABLE_KEYS = PIECE_KEYS.filter((k) => !TILE_PIECES[k].branch);
+const SIZE1_KEYS = USABLE_KEYS.filter((k) => TILE_PIECES[k].size === 1);
+const SIZE2_KEYS = USABLE_KEYS.filter((k) => TILE_PIECES[k].size === 2);
 
 export function createPieceQueue(rng) {
   const pick = (bucket) => bucket[Math.floor(rng() * bucket.length)];
-  return [pick(SIZE1_KEYS), pick(SIZE2_KEYS)];
+  let one = pick(SIZE1_KEYS);
+  const two = pick(SIZE2_KEYS);
+  // Two collinear pieces (Straight + Long) cannot turn a tip that sits one
+  // cell from a wall — under the strict single-path rule that would be an
+  // unplaceable hand. Guarantee every hand carries a corner piece.
+  if (one === 'SINGLE_STRAIGHT' && two === 'DOUBLE_STRAIGHT') one = 'SINGLE_TURN';
+  return [one, two];
 }

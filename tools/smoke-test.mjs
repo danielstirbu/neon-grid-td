@@ -4,6 +4,8 @@
 // enemies, towers engage, HUD buttons, tower context menu (upgrade/target/sell), endless.
 import { chromium } from 'playwright';
 import { mkdirSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 const BASE = process.env.BASE_URL || 'http://127.0.0.1:8002';
 const VIEWPORTS = [
@@ -174,6 +176,69 @@ async function runViewport(browser, vp) {
   });
   ok(portal.ok && portal.before === 1 && portal.after === 1 && portal.moved && portal.oldIsRoad && portal.farthest,
     `exactly one SPAWN portal, moved to the farthest new tip (ends=${portal.before}→${portal.after}, moved=${portal.moved}, old cell is road=${portal.oldIsRoad}, farthest=${portal.farthest})`);
+
+  // Strict single-path rule: lateral T-junctions and side branches are refused
+  // (red ghost), so SPAWN only advances along the chain and never jumps.
+  const branch = await page.evaluate(async () => {
+    const { TILE_PIECES } = await import('/js/config.js');
+    const g = window.game;
+    const spawn = g.path.spawnCells()[0];
+    const anyOk = (piece, origin) => [0, 1, 2, 3].some((r) => g.path.canPlaceRoadPiece(piece, origin, r).ok);
+    const side = anyOk(TILE_PIECES.SINGLE_STRAIGHT, { col: spawn.col + 1, row: spawn.row });
+    const trunk = anyOk(TILE_PIECES.DOUBLE_STRAIGHT, { col: 5, row: 5 });
+    const after = g.path.spawnCells();
+    return {
+      side, trunk,
+      unchanged: after.length === 1 && after[0].col === spawn.col && after[0].row === spawn.row,
+      singleEnd: g.path.openEnds().length === 1,
+    };
+  });
+  ok(!branch.side && !branch.trunk && branch.unchanged && branch.singleEnd,
+    `T-junctions / side branches refused, SPAWN stays at the tip (side=${branch.side}, trunk=${branch.trunk}, unchanged=${branch.unchanged})`);
+
+  // A tower directly in front of the SPAWN tip could never be built over and
+  // would lock the road — the cell must stay free for the next extension.
+  const frontLock = await page.evaluate(() => {
+    const g = window.game;
+    g.cash = 999;
+    g.ui.selectedTowerKey = 'pulse';
+    const tip = g.path.spawnCells()[0];
+    let d = 0;
+    for (; d < 4; d++) {
+      if (!g.path.hasPort(tip.col, tip.row, d)) continue;
+      const nx = tip.col + [0, 1, 0, -1][d];
+      const ny = tip.row + [-1, 0, 1, 0][d];
+      if (!g.path.isRoad(nx, ny) && !g.path.isCore(nx, ny)) break;
+    }
+    const front = { col: tip.col + [0, 1, 0, -1][d], row: tip.row + [-1, 0, 1, 0][d] };
+    const placed = g.tryPlaceTower(front.col, front.row);
+    g.ui.clearTowerSelect();
+    return { placed, cash: g.cash, towers: g.towers.length };
+  });
+  ok(!frontLock.placed && frontLock.cash === 999 && frontLock.towers === 4,
+    `tower in front of the SPAWN tip refused — road can never be walled in (placed=${frontLock.placed})`);
+
+  // Dead-hand guard: the road only grows at the tip. Push it to (4,1) dangling
+  // north, where the front cell (4,0) sits on the wall — a straight piece
+  // would dangle out of the grid, so ONLY a TURN fits (exactly the run7
+  // corner lock). A hand of collinear pieces must auto-reroll into a fitting
+  // piece so neither the player nor the auto-placer can lock the road.
+  const deadHand = await page.evaluate(async () => {
+    const { TILE_PIECES } = await import('/js/config.js');
+    const g = window.game;
+    const fits = (k) => g.path.findRoadPiecePlacement(TILE_PIECES[k], new Set()) !== null;
+    const step = g.path.placeRoadPiece(TILE_PIECES.SINGLE_STRAIGHT, { col: 4, row: 1 }, 0);
+    if (!step.ok) return { fail: step.reason };
+    g.roadHand = ['SINGLE_STRAIGHT', 'DOUBLE_STRAIGHT'];
+    const before = g.roadHand.some(fits);
+    g._refillHand(); // tops up to hand size and runs the dead-hand guard
+    const after = g.roadHand.slice();
+    g.ui.refreshPieceDock(g);
+    return { before, after, fitCount: after.filter(fits).length, sizes: after.map((k) => TILE_PIECES[k].size).sort() };
+  });
+  ok(deadHand.fail === undefined && !deadHand.before && deadHand.fitCount >= 1 &&
+    deadHand.after.length === 2 && deadHand.sizes.join() === '1,2',
+    `wall-front dead hand auto-rerolls into a fitting piece, size mix kept (hand=${deadHand.after}, fits=${deadHand.fitCount})`);
 
   // Start wave 1: enemies spawn on the single SPAWN portal and follow the BFS flow field.
   await page.click('#btn-next-wave');
