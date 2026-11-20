@@ -85,6 +85,7 @@ class Game {
     // Free the offscreen landscape canvas so a discarded Game can be collected.
     this.renderer.landscape.layer.width = 0;
     this.renderer.landscape.layer.height = 0;
+    this.renderer.sprites.dispose(); // F4: release the baked sprite bank too
   }
 
   resetRun() {
@@ -791,6 +792,10 @@ class Game {
   // ---------- Combat ----------
   fireTower(t, dt, now) {
     t.recoil = Math.max(0, t.recoil - dt * 6);
+    // F4: turrets swing to their new aim over a few frames (shortest arc),
+    // so the baked sprite rotation reads smooth instead of snapping.
+    const da = Math.atan2(Math.sin(t.angle - t.viewAngle), Math.cos(t.angle - t.viewAngle));
+    t.viewAngle += da * Math.min(1, dt * 10);
     t.cool -= dt;
     if (t.cool > 0) return;
     const target = t.pickTarget(this.enemies);

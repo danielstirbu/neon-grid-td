@@ -1,8 +1,11 @@
 // renderer.js — Canvas 2D at native DPR: meadow backdrop, tile-builder road
 // network (baked board), towers, enemies, projectiles, beams, VFX.
-// Characters are drawn with the toon.js cartoon helpers; projectiles/beams/particles stay neon.
+// Units are composited from the pre-baked, multi-layer sprite bank (sprites.js
+// F4): the draw loop is only drawImage + transforms, so recoil, core pulses,
+// turret rotation, walk/hover cycles and trails cost no vector re-raster.
 import { GRID, PALETTE, CORE_CELL } from './config.js';
-import { drawToonEnemy, drawToonTower, toonText, clearGradCache } from './toon.js';
+import { toonText } from './toon.js';
+import { SpriteBank, towerSpriteKey, easeRecoil, enemyFrame } from './sprites.js';
 import { Landscape } from './landscape.js';
 
 // P-06: pre-rendered 64px white radial glow, tinted via 'source-atop' per color.
@@ -40,6 +43,7 @@ export class Renderer {
     this.oy = 0;
     this.time = 0; // seconds since load, drives toon idle animations
     this.landscape = new Landscape();
+    this.sprites = new SpriteBank(); // F4: baked unit textures, rebuilt on resize
     this.glowSprites = new Map();
     for (const color of GLOW_COLORS) this.glowSprites.set(color, makeGlowSprite(color));
     this.board = null; // pre-rendered panel + road network + platforms (P-03/P-06 safe)
@@ -83,7 +87,9 @@ export class Renderer {
       h: this.cell * GRID.rows,
     });
     this._buildBoard();
-    clearGradCache(); // P-03: toon gradients are keyed by cell size s; drop stale entries
+    // F4: bake sprites at the RAW device DPR (up to 3x for Retina/AMOLED) —
+    // crisper than the canvas' own 2.5x clamp lets them be.
+    this.sprites.build(this.cell, Math.min(window.devicePixelRatio || 1, 3));
   }
 
   // Pre-render panel, platforms and the road network once per rebuild; per
@@ -325,29 +331,94 @@ export class Renderer {
     ctx.restore();
   }
 
+  // Blit a baked canvas of the given unit half-box at the local origin.
+  _blit(c, hw, hh) {
+    if (c) this.ctx.drawImage(c, -hw, -hh, hw * 2, hh * 2);
+  }
+
+  // Baked-base tower: pad stays grounded, turret rotates + recoils along the
+  // aim axis, energy core pulses additively, muzzle flash rides the recoil.
+  // Zero vector art per frame (F4 / P-03 / P-06).
   drawTower(t) {
     const { ctx, cell } = this;
+    const spec = this.sprites.towers.get(towerSpriteKey(t.key, t.level));
+    if (!spec) return;
+    const s = cell * 0.38;
+    const seed = t.col * 7.13 + t.row * 3.71;
+    const bob = Math.sin(this.time * 3 + seed) * s * 0.045;
+    const rec = easeRecoil(t.recoil);
+    const pulse = 0.5 + 0.5 * Math.sin(this.time * (2.2 + (t.key === 'arc' ? 0.9 : 0)) + seed);
     ctx.save();
     ctx.translate(this.sx(t.col + 0.5), this.sy(t.row + 0.5));
-    drawToonTower(ctx, t, cell, this.time);
+    this._blit(spec.base, spec.hw, spec.hh);
+    const dyn = () => {
+      // additive energy core, hotter while recoiling
+      const cr = spec.coreR * (1 + 0.16 * pulse + 0.4 * rec);
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.globalAlpha = 0.4 + 0.3 * pulse + 0.35 * rec;
+      ctx.drawImage(spec.core, (spec.corePos[0] * s) - cr, (spec.corePos[1] * s) - cr, cr * 2, cr * 2);
+    };
+    if (spec.rot) {
+      ctx.save();
+      ctx.translate(0, bob);
+      ctx.rotate(t.viewAngle);
+      ctx.translate(-rec * s * 0.26, 0);
+      this._blit(spec.rot, spec.hw, spec.hh);
+      dyn();
+      if (rec > 0.22 && spec.tip) {
+        const fr = s * (0.42 + 0.55 * rec);
+        ctx.globalAlpha = rec;
+        ctx.drawImage(this.sprites.flash, (spec.tip[0] * s) - fr, (spec.tip[1] * s) - fr, fr * 2, fr * 2);
+      }
+      ctx.restore();
+    } else if (spec.top) {
+      ctx.save();
+      ctx.translate(0, bob);
+      this._blit(spec.top, spec.hw, spec.hh);
+      dyn();
+      ctx.restore();
+    }
     ctx.restore();
   }
 
+  // Baked enemy: AO shadow stays on the ground, body frame alternates with
+  // distance travelled (walk) or bobs/tilts (hover), hurt flash and energy
+  // core pulse are additive drawImage passes — no vector re-draw (F4).
   drawEnemy(e) {
     const { ctx, cell } = this;
+    const spec = this.sprites.enemies.get(e.key);
+    if (!spec) return;
+    const s = e.size * cell;
     const x = this.sx(e.x);
     const y = this.sy(e.y);
-    const s = e.size * cell;
+    const f = enemyFrame(e);
+    const bob = spec.hover
+      ? Math.sin(this.time * 6 + e.seed) * s * 0.14
+      : -Math.abs(Math.sin((e.travel * 2.4 + e.seed * 7) * Math.PI)) * s * 0.07;
     ctx.save();
     ctx.translate(x, y);
     if (e.phased) ctx.globalAlpha = 0.32;
-    drawToonEnemy(ctx, e, s, this.time);
+    this._blit(spec.shadow, spec.hw, spec.hh);
+    ctx.save();
+    ctx.translate(0, bob);
+    if (spec.hover) ctx.rotate(Math.sin(this.time * 2.5 + e.seed) * 0.06);
+    this._blit(e.blinkLeft > 0 ? spec.blink : spec.frames[f], spec.hw, spec.hh);
+    ctx.globalCompositeOperation = 'lighter';
+    if (e.hurt > 0) {
+      ctx.globalAlpha = Math.min(0.7, e.hurt * 4);
+      ctx.drawImage(spec.glow, -s * 1.25, -s * 1.25, s * 2.5, s * 2.5);
+    }
+    const cr = spec.coreR * (1 + 0.18 * Math.sin(this.time * 4 + e.seed));
+    ctx.globalAlpha = (e.isBoss ? 0.6 : 0.34) + 0.2 * Math.sin(this.time * 4 + e.seed);
+    ctx.drawImage(spec.glow, spec.corePos[0] * s - cr, spec.corePos[1] * s - cr, cr * 2, cr * 2);
+    ctx.restore();
     if (e.slowFactor < 1) {
       ctx.globalAlpha = 0.85;
+      ctx.globalCompositeOperation = 'source-over';
       ctx.strokeStyle = PALETTE.green;
       ctx.lineWidth = Math.max(1.5, s * 0.12);
       ctx.beginPath();
-      ctx.arc(0, 0, s * 1.35, 0, Math.PI * 2);
+      ctx.arc(0, bob, s * 1.35, 0, Math.PI * 2);
       ctx.stroke();
     }
     ctx.restore();
@@ -373,6 +444,17 @@ export class Renderer {
     const r = cell * 0.28;
     ctx.save();
     ctx.globalCompositeOperation = 'lighter';
+    // F4 trail: baked tail-fading streak along the velocity vector.
+    const streak = this.sprites.streaks.get(p.color);
+    if (streak && (p.dirX || p.dirY)) {
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate(Math.atan2(p.dirY, p.dirX));
+      ctx.globalAlpha = 0.5;
+      const tl = cell * 1.15;
+      ctx.drawImage(streak, -tl, -cell * 0.22, tl, cell * 0.44);
+      ctx.restore();
+    }
     ctx.globalAlpha = 0.55;
     ctx.drawImage(this._glow(p.color), x - r, y - r, r * 2, r * 2);
     ctx.restore();

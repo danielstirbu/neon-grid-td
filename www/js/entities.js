@@ -129,6 +129,7 @@ export class Tower {
     this.level = 1;
     this.cool = 0;
     this.angle = -Math.PI / 2;
+    this.viewAngle = -Math.PI / 2; // F4: smoothed aim used by the sprite renderer
     this.targetMode = 0; // index into TARGET_MODES
     this.recoil = 0;
   }
@@ -205,6 +206,9 @@ export class Projectile {
     this.cryo = tower.key === 'cryo' ? { factor: s.slowFactor, time: s.slowTime } : null;
     this.dead = false;
     this.life = 3;
+    const a0 = Math.atan2(target.y - this.y, target.x - this.x); // F4: travel direction for the trail
+    this.dirX = Math.cos(a0);
+    this.dirY = Math.sin(a0);
   }
 
   update(dt, now, enemies) {
@@ -230,6 +234,10 @@ export class Projectile {
     const dx = t2.x - this.x;
     const dy = t2.y - this.y;
     const d = Math.hypot(dx, dy);
+    if (d > 1e-6) {
+      this.dirX = dx / d;
+      this.dirY = dy / d;
+    }
     const step = this.speed * dt;
     if (d <= step + t2.size * 0.5) {
       t2.takeDamage(this.damage);

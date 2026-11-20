@@ -6,7 +6,7 @@
   "private": true,
   "scripts": {
     "serve": "python3 -m http.server 8002 --directory www --bind 0.0.0.0",
-    "check": "node --check www/js/config.js && node --check www/js/landscape.js && node --check www/js/audio.js && node --check www/js/pathfinding.js && node --check www/js/entities.js && node --check www/js/waves.js && node --check www/js/renderer.js && node --check www/js/ui.js && node --check www/js/main.js",
+    "check": "node --check www/js/config.js && node --check www/js/landscape.js && node --check www/js/audio.js && node --check www/js/pathfinding.js && node --check www/js/entities.js && node --check www/js/waves.js && node --check www/js/toon.js && node --check www/js/unitart.js && node --check www/js/enemyart.js && node --check www/js/sprites.js && node --check www/js/renderer.js && node --check www/js/ui.js && node --check www/js/main.js",
     "test": "node tools/smoke-test.mjs",
     "verify": "npm run check && npm run test",
     "cap:android": "cap add android",
