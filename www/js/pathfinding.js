@@ -3,7 +3,9 @@
 // connector ports (DIRS indices). Two adjacent cells connect only when both
 // expose reciprocal ports; the CORE connects to every adjacent port it faces.
 // A port not matched by a neighbouring road cell is a dangling edge: over an
-// empty cell it forms an OPEN END — the SPAWN portal where enemies enter.
+// empty cell it forms an OPEN END. Exactly ONE SPAWN portal is ever live: the
+// open end farthest from the core (max BFS distance, ties won by a
+// just-placed cell); every extension of the road moves it to the new tip.
 // Towers may only occupy platforms (off-road), so the road can never be
 // blocked: the L-01/L-02 invariants hold by construction and the guards stay.
 
@@ -20,6 +22,7 @@ export class Pathfinder {
     this.cells = new Map(); // key -> { col, row }
     this.blocked = new Uint8Array(cols * rows); // towers on platforms
     this.dist = new Int32Array(cols * rows);
+    this._lastPlaced = new Set(); // idx keys of the newest placed piece (spawn tie-break)
     for (const cell of initialRoad) this._addRoad(cell.col, cell.row, cell.ports);
     this.recompute();
   }
@@ -94,9 +97,27 @@ export class Pathfinder {
     return ends;
   }
 
-  // Live SPAWN portals: every open end of the network.
+  // The single live SPAWN portal: the open end with the greatest BFS distance
+  // from the core, ties won by a cell of the most recently placed piece. A
+  // T-junction may leave extra dangling ports, but they read as normal road —
+  // enemies always enter through this one tip.
   spawnCells() {
-    return this.openEnds();
+    const ends = this.openEnds();
+    if (ends.length === 0) return [];
+    let best = ends[0];
+    let bestD = this.dist[this.idx(best.col, best.row)];
+    let bestNew = this._lastPlaced.has(this.idx(best.col, best.row));
+    for (let i = 1; i < ends.length; i++) {
+      const e = ends[i];
+      const d = this.dist[this.idx(e.col, e.row)];
+      const isNew = this._lastPlaced.has(this.idx(e.col, e.row));
+      if (d > bestD || (d === bestD && isNew && !bestNew)) {
+        best = e;
+        bestD = d;
+        bestNew = isNew;
+      }
+    }
+    return [best];
   }
 
   // Validate a road piece (TILE_PIECES entry) at origin with rot quarter-turns.
@@ -145,7 +166,8 @@ export class Pathfinder {
   }
 
   // Place a validated piece: extend the network and recompute the flow-field.
-  // SPAWN portals move automatically — they are derived from openEnds().
+  // The single SPAWN portal moves automatically — it is derived from openEnds()
+  // and the just-placed cells win distance ties, so the tip stays at the front.
   placeRoadPiece(piece, originCell, rotation) {
     const check = this.canPlaceRoadPiece(piece, originCell, rotation);
     if (!check.ok) return check;
@@ -153,8 +175,9 @@ export class Pathfinder {
       const c = check.cells[i];
       this._addRoad(c.col, c.row, check.ports[i]);
     }
+    this._lastPlaced = new Set(check.cells.map((c) => this.idx(c.col, c.row)));
     this.recompute();
-    return { ok: true, cells: check.cells, openEnds: this.openEnds() };
+    return { ok: true, cells: check.cells, spawns: this.spawnCells(), openEnds: this.openEnds() };
   }
 
   // Pure helper for auto-placement: anchor every rotation so one of the

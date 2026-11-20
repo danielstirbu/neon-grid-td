@@ -149,7 +149,33 @@ async function runViewport(browser, vp) {
   ok(await page.evaluate(() => window.game.piecePreview === null), 'ghost preview clears when the pointer leaves the grid');
   await page.keyboard.press('Escape');
 
-  // Start wave 1: enemies spawn on a live SPAWN portal and follow the BFS flow field.
+  // Single dynamic SPAWN: a piece that extends the road moves the ONE live
+  // portal to the new farthest tip; the old end stays as a normal road cell.
+  const portal = await page.evaluate(async () => {
+    const { TILE_PIECES } = await import('/js/config.js');
+    const g = window.game;
+    const before = g.path.spawnCells();
+    const piece = TILE_PIECES.DOUBLE_STRAIGHT;
+    const spot = g.path.findRoadPiecePlacement(piece, new Set());
+    if (!spot) return { fail: 'no legal spot' };
+    const res = g.placeRoadPiece(piece, spot.origin, spot.rotation);
+    const after = g.path.spawnCells();
+    const ends = g.path.openEnds();
+    const maxD = Math.max(...ends.map((e) => g.path.distAt(e.col, e.row)));
+    return {
+      ok: res.ok,
+      before: before.length,
+      after: after.length,
+      moved: before.length === 1 && after.length === 1 &&
+        (after[0].col !== before[0].col || after[0].row !== before[0].row),
+      oldIsRoad: g.path.isRoad(before[0].col, before[0].row),
+      farthest: after.length === 1 && g.path.distAt(after[0].col, after[0].row) === maxD,
+    };
+  });
+  ok(portal.ok && portal.before === 1 && portal.after === 1 && portal.moved && portal.oldIsRoad && portal.farthest,
+    `exactly one SPAWN portal, moved to the farthest new tip (ends=${portal.before}→${portal.after}, moved=${portal.moved}, old cell is road=${portal.oldIsRoad}, farthest=${portal.farthest})`);
+
+  // Start wave 1: enemies spawn on the single SPAWN portal and follow the BFS flow field.
   await page.click('#btn-next-wave');
   await page.waitForTimeout(1400);
   const wave = await page.evaluate(() => {
@@ -157,13 +183,15 @@ async function runViewport(browser, vp) {
     return {
       active: g.waveActive,
       count: g.enemies.length,
+      singlePortal: g.path.spawnCells().length === 1,
       onRoad: g.enemies.length > 0 && g.enemies.every((e) =>
         g.path.isRoad(Math.floor(e.x), Math.floor(e.y)) &&
         g.path.distAt(Math.floor(e.x), Math.floor(e.y)) >= 0),
     };
   });
   ok(wave.active && wave.count > 0, `wave 1 started with ${wave.count} enemies`);
-  ok(wave.onRoad, 'every enemy walks a connected road cell toward the core');
+  ok(wave.singlePortal, 'only one SPAWN portal is live during the wave');
+  ok(wave.onRoad, 'every enemy walks the connected road toward the core (spawned from the single portal)');
   // Tag the leading enemy; if it dies or leaks it advanced, if it is still
   // alive its BFS distance to the core must have dropped. (A plain list scan
   // is flaky: new spawns queue up behind the portal during the wait window.)

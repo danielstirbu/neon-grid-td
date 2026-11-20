@@ -106,7 +106,6 @@ class Game {
     this.towerGrid.clear();
     this.path = new Pathfinder(GRID.cols, GRID.rows, GRID.spawn, GRID.core);
     this.renderer.setNetwork(this.path);
-    this._spawnCursor = 0;
     this.selectedTower = null;
     // Tile-builder: seeded 2-piece hand + auto-wave countdown for this run.
     this.pieceRng = makePieceRng((Math.random() * 0xffffffff) >>> 0);
@@ -286,12 +285,9 @@ class Game {
     while (ev.length && ev[0].at <= this.spawnClock) {
       const e = ev.shift();
       const enemy = new Enemy(e.type, this.waveScale);
-      // SPAWN portals are the open ends of the road network; round-robin so
-      // a T-junction (two open ends) feeds both portals evenly.
-      const portals = this.path.spawnCells();
-      const portal = portals.length
-        ? portals[this._spawnCursor++ % portals.length]
-        : GRID.spawn;
+      // Exactly one SPAWN portal is live — the farthest open end from the
+      // core; every road extension moves it, so all enemies enter through it.
+      const portal = this.path.spawnCells()[0] || GRID.spawn;
       enemy.x = portal.col + 0.5;
       enemy.y = portal.row + 0.5;
       this.repath(enemy);
@@ -490,8 +486,9 @@ class Game {
   }
 
   // Tile-builder: grow the road with a TILE_PIECES piece at origin, rot
-  // quarter-turns. Portals (open ends) move automatically; the baked board is
-  // re-rendered and every walker re-joins the new flow-field.
+  // quarter-turns. The single SPAWN portal moves to the new farthest tip
+  // automatically; the baked board is re-rendered and every walker re-joins
+  // the new flow-field.
   placeRoadPiece(piece, originCell, rotation) {
     const res = this.path.placeRoadPiece(piece, originCell, rotation);
     if (!res.ok) {

@@ -13,7 +13,7 @@ export const CORE_CELL = {
 export const GRID = {
   cols: COLS,
   rows: ROWS,
-  spawn: { col: 4, row: 4 }, // seed portal; live portals are dynamic: Pathfinder.spawnCells()
+  spawn: { col: 4, row: 4 }, // fallback only; the live SPAWN is the one Pathfinder.spawnCells() returns
   core: CORE_CELL,
 };
 

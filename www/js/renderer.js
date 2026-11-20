@@ -225,14 +225,15 @@ export class Renderer {
     // Panel + platforms + road network were baked into this.board.
     if (this.board) ctx.drawImage(this.board, this.ox, this.oy, cell * GRID.cols, cell * GRID.rows);
 
-    // CORE at the centre; SPAWN portals pulse at every open end of the network.
+    // CORE at the centre; the single SPAWN portal pulses at the farthest tip.
     this._marker(CORE_CELL, PALETTE.green, 'CORE');
     if (this.path) {
-      const pulse = 0.55 + 0.35 * Math.sin(this.time * 4);
-      for (const end of this.path.spawnCells()) {
+      const portal = this.path.spawnCells()[0];
+      if (portal) {
+        const pulse = 0.55 + 0.35 * Math.sin(this.time * 4);
         ctx.save();
         ctx.globalAlpha = pulse;
-        this._marker(end, PALETTE.magenta, 'SPAWN');
+        this._marker(portal, PALETTE.magenta, 'SPAWN');
         ctx.restore();
       }
     }

@@ -36,14 +36,14 @@ requestAnimationFrame ──► frame(now)
 
 ## Coordonate și pathfinding
 
-- Grila: `GRID.cols × GRID.rows` (9×14), celule în „unit space"; CORE-ul stă în mijlocul grilei (`CORE_CELL` = 4,7); `GRID.spawn` e doar un fallback, portalurile reale sunt dinamice (vezi mai jos).
+- Grila: `GRID.cols × GRID.rows` (9×14), celule în „unit space"; CORE-ul stă în mijlocul grilei (`CORE_CELL` = 4,7); `GRID.spawn` e doar un fallback, portalul real e unic și dinamic (vezi mai jos).
 - Transformare: `Renderer.sx(x)=ox+x*cell`, `sy(y)=oy+y*cell`; invers `Renderer.toGrid(px,py)`. Canvas-ul este dimensionat la `dpr` nativ.
 - Tile-builder: rețeaua de drum este o mulțime de celule, fiecare cu un mask de porturi (indici `DIRS` = N,E,S,W). Două celule de drum adiacente se leagă doar dacă ambele expun porturi reciproce; CORE-ul se leagă de orice port cu care se întâlnește. `INITIAL_ROAD` = 3 celule nord de CORE (o linie cu un singur capăt deschis).
-- Un port care nu întâlnește o celulă de drum/CORE alăturat e *dangling*: deasupra unei celule libere formează un **capăt deschis** = portal SPAWN. `Pathfinder.openEnds()`/`spawnCells()` le calculează din network — portalurile se mută automat când jucătorul extinde drumul (`TILE_PIECES` de 1–2 celule, rotite cu `rotatePiece()`; plasarea validează legătura reciprocă + celule libere + cel puțin un port pe un capăt deschis).
+- Un port care nu întâlnește o celulă de drum/CORE alăturat e *dangling*: deasupra unei celule libere formează un **capăt deschis**. `Pathfinder.openEnds()` le calculează pe toate, dar **portalul SPAWN este unic**: `spawnCells()` returnează întotdeauna o singură celulă — capătul deschis cu distanța BFS cea mai mare față de CORE (la egalitate câștigă o celulă din piesa tocmai plasată, `placeRoadPiece()` le ține minte). Când jucătorul extinde drumul, portalul se mută automat la noul vârf, iar vechiul capăt rămâne simplă celulă de drum (`TILE_PIECES` de 1–2 celule, rotite cu `rotatePiece()`; plasarea validează legătura reciprocă + celule libere + cel puțin un port pe un capăt deschis).
 - `Pathfinder.recompute()` face BFS pornind din CORE, **doar pe muchiile cu porturi reciproce**. Rezultatul e `dist[]` (distanță în pași până la core).
 - `nextStep(fx,fy)` alege vecinul cu `dist` mai mică → punct central al celulei. Mono-descrescător, deci nu poate boucla.
 - Consecință structurală: turnurile se pot construi **doar pe platforme** (celule care nu sunt drum și nu sunt CORE), iar piesele de drum nu pot suprapune turnuri sau alte celule, deci traseul nu poate fi blocat — L-01/L-02 sunt adevărate prin construcție. Guard-ele `isReachableFromCore()` și `_escapeToReachable()` rămân ca centură de siguranță.
-- Spawn-ul în `main.js`: inamicii apar round-robin pe `path.spawnCells()` (un T-junction deschide un al doilea portal); după fiecare `placeRoadPiece()` board-ul se re-coace (`renderer._buildBoard()`) și toți inamicii se re-atașează de flow-field (`repathAll()`).
+- Spawn-ul în `main.js`: toți inamicii valului se nasc **exclusiv din portalul SPAWN unic** (`path.spawnCells()[0]`, cu `GRID.spawn` doar ca fallback teoretic); după fiecare `placeRoadPiece()` board-ul se re-coace (`renderer._buildBoard()`) și toți inamicii se re-atașează de flow-field (`repathAll()`).
 
 ## Flux de input / UI
 
