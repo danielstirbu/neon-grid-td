@@ -1,5 +1,5 @@
 // entities.js — Tower, Enemy, Projectile, Beam, Particle, FloatingText.
-import { TOWERS, ENEMIES, towerLevelStats, towerInvested, TARGET_MODES } from './config.js';
+import { TOWERS, ENEMIES, ECONOMY, towerLevelStats, towerInvested, TARGET_MODES } from './config.js';
 
 export class Enemy {
   constructor(typeKey, waveScale = 1) {
@@ -28,7 +28,7 @@ export class Enemy {
     this.phaseEvery = def.phaseEvery || 0;
     this.phaseTime = def.phaseTime || 0;
     this.phaseLeft = 0;
-    this.nextPhase = this.phaseEvery ? this.phaseEvery : 0;
+    this.phaseClock = 0; // L-09: single timer; cycle length is exactly phaseEvery
     this.path = [];
     this.pathIdx = 0;
     this.travel = 0; // distance travelled, used by 'FIRST' targeting
@@ -52,12 +52,15 @@ export class Enemy {
   }
 
   takeDamage(amount) {
-    if (this.dead) return;
-    const dealt = Math.max(1, amount - this.armor);
+    if (this.dead) return 0;
+    // L-03: flat floor of 1 made armor nonlinear; use a 10% proportional floor
+    // so upgrades scale linearly while armor never grants full immunity.
+    const mitigated = Math.max(0, amount - this.armor);
+    const dealt = Math.max(mitigated, amount * 0.1);
     this.hp -= dealt;
     this.hurt = 0.16;
     if (this.hp <= 0) this.dead = true;
-    return dealt;
+    return Math.round(dealt);
   }
 
   update(dt, now) {
@@ -69,12 +72,13 @@ export class Enemy {
     }
     if (this.blinkLeft > 0) this.blinkLeft -= dt;
     if (this.phaseEvery) {
-      this.nextPhase -= dt;
-      if (this.nextPhase <= 0) {
+      this.phaseClock += dt;
+      if (this.phaseLeft > 0) {
+        this.phaseLeft -= dt;
+      } else if (this.phaseClock >= this.phaseEvery) {
+        this.phaseClock = 0;
         this.phaseLeft = this.phaseTime;
-        this.nextPhase = this.phaseEvery;
       }
-      if (this.phaseLeft > 0) this.phaseLeft -= dt;
     }
     if (this.regen && this.hp < this.maxHp) {
       this.hp = Math.min(this.maxHp, this.hp + this.regen * dt);
@@ -140,7 +144,7 @@ export class Tower {
   }
 
   get sellValue() {
-    return Math.floor(this.invested * 0.6);
+    return Math.floor(this.invested * ECONOMY.sellRatio);
   }
 
   get targetModeName() {
@@ -182,6 +186,8 @@ export class Tower {
 }
 
 export class Projectile {
+  static RETARGET_RADIUS = 1.5; // L-10: cells to look for a new target when the original dies
+
   constructor(tower, target) {
     const s = tower.stats;
     this.x = tower.col + 0.5;
@@ -195,30 +201,54 @@ export class Projectile {
     this.life = 3;
   }
 
-  update(dt, now) {
+  update(dt, now, enemies) {
     this.life -= dt;
     if (this.life <= 0) {
       this.dead = true;
+      this.impacted = true;
       return;
     }
     const t = this.target;
     if (t.dead || t.phased) {
-      this.dead = true;
-      return;
+      // L-10: instead of evaporating, pass to the nearest live enemy in a small
+      // radius; only die silently if nothing is nearby.
+      const next = this._retarget(enemies);
+      if (!next) {
+        this.dead = true;
+        this.impacted = true;
+        return;
+      }
+      this.target = next;
     }
-    const dx = t.x - this.x;
-    const dy = t.y - this.y;
+    const t2 = this.target;
+    const dx = t2.x - this.x;
+    const dy = t2.y - this.y;
     const d = Math.hypot(dx, dy);
     const step = this.speed * dt;
-    if (d <= step + t.size * 0.5) {
-      t.takeDamage(this.damage);
-      if (this.cryo) t.applySlow(this.cryo.factor, this.cryo.time, now);
+    if (d <= step + t2.size * 0.5) {
+      t2.takeDamage(this.damage);
+      if (this.cryo) t2.applySlow(this.cryo.factor, this.cryo.time, now);
       this.dead = true;
       this.impacted = true;
     } else {
       this.x += (dx / d) * step;
       this.y += (dy / d) * step;
     }
+  }
+
+  _retarget(enemies) {
+    if (!enemies) return null;
+    let best = null;
+    let bestD = Projectile.RETARGET_RADIUS;
+    for (const e of enemies) {
+      if (e.dead || e.phased) continue;
+      const d = Math.hypot(e.x - this.x, e.y - this.y);
+      if (d < bestD) {
+        bestD = d;
+        best = e;
+      }
+    }
+    return best;
   }
 }
 

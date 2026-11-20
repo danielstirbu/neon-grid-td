@@ -1,5 +1,5 @@
 // main.js — game loop (clamped dt), Pointer Events input, state machine, combat orchestration.
-import { GRID, ECONOMY, SPEED_OPTIONS, PALETTE, TOWERS } from './config.js';
+import { GRID, ECONOMY, SPEED_OPTIONS, PALETTE, TOWERS, WAVES_META } from './config.js';
 import { audio } from './audio.js';
 import { Pathfinder } from './pathfinding.js';
 import { Enemy, Tower, Projectile, Beam, FloatingText, burst } from './entities.js';
@@ -17,7 +17,7 @@ class Game {
     this.state = 'menu'; // menu | playing | over
     this._needsRender = true; // P-08: paint the first frame, then idle until an event asks
     this.endless = false;
-    this.totalWaves = 20;
+    this.totalWaves = WAVES_META.total; // L-07: single source of truth with waves.js
     // resetRun() touches these, so they must exist before it is first called.
     this.towerGrid = new Map();
     this.hover = null;
@@ -26,11 +26,12 @@ class Game {
     this.resetRun();
 
     this._bindInput();
-    window.addEventListener('resize', () => {
+    // P-07: named handlers so destroy() can detach every global listener.
+    this._onResize = () => {
       this.renderer.resize();
       this.requestRender();
-    });
-    document.addEventListener('visibilitychange', () => {
+    };
+    this._onVisibility = () => {
       if (document.hidden) {
         if (this.state === 'playing' && !this.paused) {
           this.paused = true;
@@ -46,9 +47,34 @@ class Game {
           this.requestRender();
         }
       }
-    });
+    };
+    this._onKey = (e) => {
+      if (e.key === ' ' || e.key === 'p') this.togglePause();
+      if (e.key === 'n') this.startNextWave();
+      if (e.key === 'Escape') { this.ui.clearTowerSelect(); this.ui.closeTowerMenu(); }
+      if (e.key >= '1' && e.key <= '4') {
+        const keys = ['pulse', 'cryo', 'arc', 'rail'];
+        this.ui.toggleTowerSelect(keys[+e.key - 1]);
+      }
+      this.requestRender();
+    };
+    window.addEventListener('resize', this._onResize);
+    document.addEventListener('visibilitychange', this._onVisibility);
+    window.addEventListener('keydown', this._onKey);
+    this._running = true;
     this.ui.updateHUD(this);
     requestAnimationFrame((t) => this.frame(t));
+  }
+
+  destroy() {
+    this._running = false;
+    window.removeEventListener('resize', this._onResize);
+    document.removeEventListener('visibilitychange', this._onVisibility);
+    window.removeEventListener('keydown', this._onKey);
+    this._unbindInput();
+    // Free the offscreen landscape canvas so a discarded Game can be collected.
+    this.renderer.landscape.layer.width = 0;
+    this.renderer.landscape.layer.height = 0;
   }
 
   resetRun() {
@@ -128,7 +154,7 @@ class Game {
     this.spawnClock = 0;
     this.waveScale = waveScale(this.wave, this.endless);
     this.waveActive = true;
-    const isBoss = this.wave % 5 === 0;
+    const isBoss = this.wave % WAVES_META.bossEvery === 0;
     this.ui.showBanner(isBoss ? `⚠ WAVE ${this.wave} — BOSS ⚠` : `WAVE ${this.wave}`);
     audio.play(isBoss ? 'boss' : 'wave');
     this.ui.vibrate(isBoss ? [40, 60, 40] : 15);
@@ -298,6 +324,16 @@ class Game {
       this.ui.vibrate(30);
       return false;
     }
+    // L-11: refuse to build on top of a walking enemy.
+    const occupied = this.enemies.some(
+      (e) => !e.dead && !e.reachedCore && Math.floor(e.x) === col && Math.floor(e.y) === row
+    );
+    if (occupied) {
+      audio.play('deny');
+      this.ui.toast('ENEMY IN CELL');
+      this.ui.vibrate(30);
+      return false;
+    }
     const t = new Tower(key, col, row);
     this.path.place(col, row);
     // L-01: a legal spawn→core path is not enough — no enemy already on the map
@@ -373,13 +409,13 @@ class Game {
   _bindInput() {
     const c = this.canvas;
     c.style.touchAction = 'none';
-    c.addEventListener('pointerdown', (e) => {
+    this._onPointerDown = (e) => {
       e.preventDefault();
       audio.unlock();
       this.pointerDown = { x: e.clientX, y: e.clientY, id: e.pointerId };
       c.setPointerCapture?.(e.pointerId);
-    });
-    c.addEventListener('pointermove', (e) => {
+    };
+    this._onPointerMove = (e) => {
       if (this.state !== 'playing') return;
       const rect = c.getBoundingClientRect();
       const g = this.renderer.toGrid(e.clientX - rect.left, e.clientY - rect.top);
@@ -390,8 +426,8 @@ class Game {
         ? { col, row, valid: this.path.canPlace(col, row) && this.cash >= TOWERS[this.ui.selectedTowerKey].cost }
         : null;
       if (this.paused) this.requestRender();
-    });
-    c.addEventListener('pointerup', (e) => {
+    };
+    this._onPointerUp = (e) => {
       e.preventDefault();
       const down = this.pointerDown;
       this.pointerDown = null;
@@ -405,18 +441,20 @@ class Game {
       if (col < 0 || row < 0 || col >= GRID.cols || row >= GRID.rows) return;
       this.handleTap(col, row);
       this.requestRender();
-    });
-    c.addEventListener('pointercancel', () => { this.pointerDown = null; });
-    window.addEventListener('keydown', (e) => {
-      if (e.key === ' ' || e.key === 'p') this.togglePause();
-      if (e.key === 'n') this.startNextWave();
-      if (e.key === 'Escape') { this.ui.clearTowerSelect(); this.ui.closeTowerMenu(); }
-      if (e.key >= '1' && e.key <= '4') {
-        const keys = ['pulse', 'cryo', 'arc', 'rail'];
-        this.ui.toggleTowerSelect(keys[+e.key - 1]);
-      }
-      this.requestRender();
-    });
+    };
+    this._onPointerCancel = () => { this.pointerDown = null; };
+    c.addEventListener('pointerdown', this._onPointerDown);
+    c.addEventListener('pointermove', this._onPointerMove);
+    c.addEventListener('pointerup', this._onPointerUp);
+    c.addEventListener('pointercancel', this._onPointerCancel);
+  }
+
+  _unbindInput() {
+    const c = this.canvas;
+    c.removeEventListener('pointerdown', this._onPointerDown);
+    c.removeEventListener('pointermove', this._onPointerMove);
+    c.removeEventListener('pointerup', this._onPointerUp);
+    c.removeEventListener('pointercancel', this._onPointerCancel);
   }
 
   handleTap(col, row) {
@@ -446,9 +484,15 @@ class Game {
     t.cool -= dt;
     if (t.cool > 0) return;
     const target = t.pickTarget(this.enemies);
-    if (!target) return;
+    if (!target) {
+      t.cool = 0; // don't bank negative cooldown while idle
+      return;
+    }
     const s = t.stats;
-    t.cool = 1 / s.fireRate;
+    // L-04: carry the overshoot across shots instead of overwriting, so fire
+    // rate is framerate-independent; clamp only after long stalls.
+    t.cool += 1 / s.fireRate;
+    if (t.cool < 0) t.cool = 0;
     t.recoil = 1;
     t.angle = Math.atan2(target.y - (t.row + 0.5), target.x - (t.col + 0.5));
     const cx = t.col + 0.5;
@@ -485,19 +529,20 @@ class Game {
       const hitSet = new Set();
       let dmg = s.damage;
       for (let i = 0; i < s.chainCount; i++) {
-        if (!from || hitSet.has(from)) break;
+        if (!from) break;
         hitSet.add(from);
         pts.push({ x: from.x, y: from.y });
         const dealt = from.takeDamage(dmg);
         this.floaters.push(new FloatingText(from.x, from.y - from.size, `-${dealt}`, t.def.color, 0.36));
         dmg *= t.def.chainFalloff;
-        // next nearest unhit enemy within chainRange
+        // next nearest unhit enemy within chainRange (L-12: skip-and-continue,
+        // inclusive range bound, so chainCount is never cut short)
         let next = null;
-        let nd = t.def.chainRange;
+        let nd = Infinity;
         for (const e of this.enemies) {
           if (e.dead || hitSet.has(e) || e.phased) continue;
           const d = Math.hypot(e.x - from.x, e.y - from.y);
-          if (d < nd) { nd = d; next = e; }
+          if (d <= t.def.chainRange && d < nd) { nd = d; next = e; }
         }
         from = next;
       }
@@ -508,6 +553,7 @@ class Game {
 
   // ---------- Loop ----------
   frame(now) {
+    if (!this._running) return; // P-07: destroy() stops the rAF loop
     requestAnimationFrame((t) => this.frame(t));
     let dt = (now - this.lastTime) / 1000;
     this.lastTime = now;
@@ -536,7 +582,7 @@ class Game {
     this.updateWave(dt);
     for (const t of this.towers) this.fireTower(t, dt, now);
     for (const e of this.enemies) e.update(dt, now);
-    for (const p of this.projectiles) p.update(dt, now);
+    for (const p of this.projectiles) p.update(dt, now, this.enemies);
     for (const b of this.beams) b.update(dt);
 
     // kills & leaks
@@ -582,7 +628,19 @@ class Game {
     if (this.selectedTower) r.drawSelected(this.selectedTower);
     for (const t of this.towers) r.drawTower(t);
     for (const b of this.beams) r.drawBeam(b);
-    for (const e of this.enemies) r.drawEnemy(e);
+    // P-10: viewport culling. Cheap bounds check in grid coordinates before the
+    // expensive toon character draw. Margin of one grid cell keeps the bob
+    // animation from clipping at the edge.
+    const viewMinX = -r.ox / r.cell - 1;
+    const viewMaxX = (r.canvas.width / r.dpr - r.ox) / r.cell + 1;
+    const viewMinY = -r.oy / r.cell - 1;
+    const viewMaxY = (r.canvas.height / r.dpr - r.oy) / r.cell + 1;
+    for (const e of this.enemies) {
+      const rad = e.size + 0.15;
+      if (e.x + rad < viewMinX || e.x - rad > viewMaxX ||
+          e.y + rad < viewMinY || e.y - rad > viewMaxY) continue;
+      r.drawEnemy(e);
+    }
     for (const p of this.projectiles) r.drawProjectile(p);
     for (const p of this.particles) r.drawParticle(p);
     for (const f of this.floaters) r.drawFloatingText(f);
