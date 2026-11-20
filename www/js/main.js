@@ -15,6 +15,7 @@ class Game {
     this.ui = new UI(this);
 
     this.state = 'menu'; // menu | playing | over
+    this._needsRender = true; // P-08: paint the first frame, then idle until an event asks
     this.endless = false;
     this.totalWaves = 20;
     // resetRun() touches these, so they must exist before it is first called.
@@ -25,9 +26,26 @@ class Game {
     this.resetRun();
 
     this._bindInput();
-    window.addEventListener('resize', () => this.renderer.resize());
+    window.addEventListener('resize', () => {
+      this.renderer.resize();
+      this.requestRender();
+    });
     document.addEventListener('visibilitychange', () => {
-      if (document.hidden && this.state === 'playing') this.paused = true;
+      if (document.hidden) {
+        if (this.state === 'playing' && !this.paused) {
+          this.paused = true;
+          this.autoPaused = true; // remember it was automatic
+          this.ui.showPauseOverlay();
+          this.requestRender();
+        }
+      } else if (this.autoPaused) {
+        this.autoPaused = false;
+        // keep paused, but show a "tap to resume" overlay so the state is obvious
+        if (this.state === 'playing' && this.paused) {
+          this.ui.showPauseOverlay();
+          this.requestRender();
+        }
+      }
     });
     this.ui.updateHUD(this);
     requestAnimationFrame((t) => this.frame(t));
@@ -41,6 +59,7 @@ class Game {
     this.schedule = null;
     this.spawnClock = 0;
     this.paused = false;
+    this.autoPaused = false;
     this.speedIndex = 0;
     this.enemies = [];
     this.towers = [];
@@ -61,6 +80,7 @@ class Game {
     this.state = 'playing';
     this.ui.hideStart();
     this.ui.hideOver();
+    this.requestRender();
     audio.play('wave');
   }
 
@@ -72,27 +92,36 @@ class Game {
     this.state = 'menu';
     this.resetRun();
     this.ui.showStart();
+    this.requestRender();
   }
 
   togglePause() {
     if (this.state !== 'playing') return;
     this.paused = !this.paused;
+    this.autoPaused = false;
+    if (this.paused) this.ui.showPauseOverlay();
+    else this.ui.hidePauseOverlay();
+    this.requestRender();
     audio.play('tap');
   }
 
   toggleSpeed() {
     this.speedIndex = (this.speedIndex + 1) % SPEED_OPTIONS.length;
+    this.requestRender();
     audio.play('tap');
   }
 
   toggleSound() {
     audio.setEnabled(!audio.enabled);
+    this.requestRender();
     if (audio.enabled) audio.play('tap');
   }
 
   // ---------- Waves ----------
   startNextWave() {
-    if (this.state !== 'playing' || this.waveActive) return;
+    // Blocked while paused: starting a wave during a phantom pause would set
+    // waveActive without step() ever running, locking the run (L-05).
+    if (this.state !== 'playing' || this.waveActive || this.paused) return;
     this.wave += 1;
     const groups = waveGroups(this.wave, this.endless);
     this.schedule = buildSchedule(groups);
@@ -123,44 +152,126 @@ class Game {
       this.cash += bonus;
       this.floaters.push(new FloatingText(GRID.core.col + 0.5, GRID.core.row, `+¤${bonus}`, PALETTE.yellow, 0.55));
       if (!this.endless && this.wave >= this.totalWaves) return this.victory();
+    } else if (ev.length === 0 && this.spawnClock > this.schedule.duration + 30) {
+      // Failsafe (L-02): a stuck enemy must never leave the wave — and the NEXT
+      // WAVE button — locked forever. Remove stragglers (zero reward, no leak
+      // credit) and close the wave out.
+      console.warn(`Wave ${this.wave}: forcing close after ${this.spawnClock.toFixed(1)}s (${this.enemies.length} stuck enemies)`);
+      for (const e of this.enemies) {
+        if (!e.dead && !e.reachedCore) {
+          e.reward = 0;
+          e.dead = true;
+        }
+      }
     }
   }
 
-  repath(enemy) {
-    // Walk the flow-field from the enemy's current cell to the core, building waypoints.
+  // Walk the flow-field from a float position toward the core, building waypoints.
+  _flowPath(fx, fy) {
     const pts = [];
-    let fx = enemy.x;
-    let fy = enemy.y;
     let guard = 0;
     while (guard++ < GRID.cols * GRID.rows + 4) {
       const col = Math.floor(fx);
       const row = Math.floor(fy);
       if (col === GRID.core.col && row === GRID.core.row) break;
       const nxt = this.path.nextStep(fx, fy);
+      if (Math.abs(nxt.x - (col + 0.5)) < 1e-9 && Math.abs(nxt.y - (row + 0.5)) < 1e-9) {
+        // nextStep returned the same cell center (no reachable neighbor) — stop here.
+        break;
+      }
       pts.push(nxt);
       fx = nxt.x;
       fy = nxt.y;
-      if (Math.abs(nxt.x - (col + 0.5)) < 1e-9 && Math.abs(nxt.y - (row + 0.5)) < 1e-9) {
-        // nextStep returned the same cell center (stuck on a wall) — nudge forward.
-        break;
-      }
     }
-    enemy.path = pts;
+    return pts;
+  }
+
+  repath(enemy) {
     enemy.pathIdx = 0;
+    const pts = this._flowPath(enemy.x, enemy.y);
+    if (pts.length > 0) {
+      enemy.path = pts;
+      return;
+    }
+    const col = Math.floor(enemy.x);
+    const row = Math.floor(enemy.y);
+    if (col === GRID.core.col && row === GRID.core.row) {
+      // L-02: already on the core cell — finish the journey instead of leaving an
+      // empty path that freezes the enemy (and the wave) forever.
+      enemy.path = [];
+      enemy.reachedCore = true;
+      return;
+    }
+    // L-01 safety net: the cell has no path to the core (isolated pocket). Never
+    // credit reachedCore; walk out of the pocket, then rejoin the flow-field.
+    const escape = this._escapeToReachable(col, row);
+    if (escape) {
+      const last = escape[escape.length - 1];
+      enemy.path = escape.concat(this._flowPath(last.x, last.y));
+    } else {
+      // Walled in with nowhere to walk: remove with zero reward (never a fake leak)
+      // so the wave can still end.
+      enemy.path = [];
+      enemy.reward = 0;
+      enemy.dead = true;
+    }
   }
 
   repathAll() {
     for (const e of this.enemies) this.repath(e);
   }
 
+  // BFS through open cells from (col,row) to the nearest cell that has a live
+  // path to the core; returns the waypoint chain (cell centers), or null if none.
+  _escapeToReachable(col, row) {
+    const path = this.path;
+    const prev = new Map();
+    const seen = new Set([path.idx(col, row)]);
+    let queue = [[col, row]];
+    let goal = null;
+    while (queue.length && !goal) {
+      const next = [];
+      for (const [cx, cy] of queue) {
+        const dirs = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+        for (const [dx, dy] of dirs) {
+          const nx = cx + dx;
+          const ny = cy + dy;
+          if (!path.inBounds(nx, ny) || path.isBlocked(nx, ny)) continue;
+          const ni = path.idx(nx, ny);
+          if (seen.has(ni)) continue;
+          seen.add(ni);
+          prev.set(ni, [cx, cy]);
+          if (path.isReachableFromCore(nx, ny)) {
+            goal = [nx, ny];
+            break;
+          }
+          next.push([nx, ny]);
+        }
+        if (goal) break;
+      }
+      queue = next;
+    }
+    if (!goal) return null;
+    const pts = [];
+    let cur = goal;
+    while (cur) {
+      pts.push({ x: cur[0] + 0.5, y: cur[1] + 0.5 });
+      cur = prev.get(path.idx(cur[0], cur[1]));
+    }
+    pts.reverse();
+    return pts;
+  }
+
   victory() {
     this.state = 'over';
+    this.requestRender();
     audio.play('victory');
     this.ui.showOver('GRID SECURED', `All ${this.totalWaves} waves repelled. Core integrity ${this.core}/${ECONOMY.startCore}.`);
   }
 
   defeat() {
     this.state = 'over';
+    this.requestRender();
     audio.play('defeat');
     this.ui.vibrate([60, 50, 60, 50, 120]);
     this.ui.showOver('GRID BREACHED', `The core fell on wave ${this.wave}.`);
@@ -188,9 +299,22 @@ class Game {
       return false;
     }
     const t = new Tower(key, col, row);
+    this.path.place(col, row);
+    // L-01: a legal spawn→core path is not enough — no enemy already on the map
+    // may end up in a pocket cut off from the core. Roll back if one would.
+    const trapped = this.enemies.some(
+      (e) => !e.dead && !e.reachedCore &&
+             !this.path.isReachableFromCore(Math.floor(e.x), Math.floor(e.y))
+    );
+    if (trapped) {
+      this.path.remove(col, row);
+      audio.play('deny');
+      this.ui.toast('WOULD TRAP ENEMIES');
+      this.ui.vibrate(30);
+      return false;
+    }
     this.towers.push(t);
     this.towerGrid.set(`${col},${row}`, t);
-    this.path.place(col, row);
     this.repathAll();
     this.cash -= def.cost;
     audio.play('place');
@@ -202,7 +326,8 @@ class Game {
 
   upgradeSelected() {
     const t = this.ui.menuTower;
-    if (!t || !t.canUpgrade) return;
+    if (!t || !t.canUpgrade || !this.towers.includes(t)) return;
+    this.requestRender();
     const cost = t.upgradeCost;
     if (this.cash < cost) {
       audio.play('deny');
@@ -219,7 +344,8 @@ class Game {
 
   sellSelected() {
     const t = this.ui.menuTower;
-    if (!t) return;
+    if (!t || !this.towers.includes(t)) return;
+    this.requestRender();
     this.cash += t.sellValue;
     this.towers = this.towers.filter((x) => x !== t);
     this.towerGrid.delete(`${t.col},${t.row}`);
@@ -233,7 +359,7 @@ class Game {
 
   cycleSelectedTarget() {
     const t = this.ui.menuTower;
-    if (!t) return;
+    if (!t || !this.towers.includes(t)) return;
     t.cycleTargetMode();
     audio.play('tap');
     this.ui.refreshTowerMenu();
@@ -263,6 +389,7 @@ class Game {
         col >= 0 && row >= 0 && col < GRID.cols && row < GRID.rows
         ? { col, row, valid: this.path.canPlace(col, row) && this.cash >= TOWERS[this.ui.selectedTowerKey].cost }
         : null;
+      if (this.paused) this.requestRender();
     });
     c.addEventListener('pointerup', (e) => {
       e.preventDefault();
@@ -277,6 +404,7 @@ class Game {
       const row = Math.floor(g.y);
       if (col < 0 || row < 0 || col >= GRID.cols || row >= GRID.rows) return;
       this.handleTap(col, row);
+      this.requestRender();
     });
     c.addEventListener('pointercancel', () => { this.pointerDown = null; });
     window.addEventListener('keydown', (e) => {
@@ -287,6 +415,7 @@ class Game {
         const keys = ['pulse', 'cryo', 'arc', 'rail'];
         this.ui.toggleTowerSelect(keys[+e.key - 1]);
       }
+      this.requestRender();
     });
   }
 
@@ -383,12 +512,23 @@ class Game {
     let dt = (now - this.lastTime) / 1000;
     this.lastTime = now;
     dt = Math.min(Math.max(dt, 0), 0.05); // clamp to avoid tunnelling after tab-switch
-    if (this.state === 'playing' && !this.paused) {
+    const active = this.state === 'playing' && !this.paused;
+    if (active) {
       const steps = SPEED_OPTIONS[this.speedIndex];
       for (let i = 0; i < steps; i++) this.step(dt);
+      this.render();
+      this.ui.updateHUD(this);
+    } else if (this._needsRender) {
+      // P-08: menu / game-over / paused stay fully idle except one repaint
+      // per state change, so a static screen does not burn GPU/battery.
+      this._needsRender = false;
+      this.render();
+      this.ui.updateHUD(this);
     }
-    this.render();
-    this.ui.updateHUD(this);
+  }
+
+  requestRender() {
+    this._needsRender = true;
   }
 
   step(dt) {

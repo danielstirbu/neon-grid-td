@@ -9,6 +9,16 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="apple-mobile-web-app-title" content="NeonGridTD" />
   <meta name="description" content="Neon Grid TD — mobile-first cyberpunk tower defense. Plays 100% offline." />
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'none';
+                 script-src 'self';
+                 style-src 'self';
+                 img-src 'self' data:;
+                 connect-src 'self';
+                 manifest-src 'self';
+                 base-uri 'none';
+                 form-action 'none';
+                 object-src 'none'" />
   <title>Neon Grid TD</title>
   <link rel="manifest" href="manifest.json" />
   <link rel="icon" type="image/svg+xml" href="icons/icon-192.svg" />
@@ -80,17 +90,19 @@
       </div>
     </div>
 
+    <div id="screen-pause" class="overlay hidden">
+      <div class="overlay-panel">
+        <h2 class="logo small">PAUSED</h2>
+        <p class="tagline">The run is paused. Resume when you are ready.</p>
+        <button id="btn-resume" class="primary-btn big">▶ RESUME</button>
+      </div>
+    </div>
+
     <div id="toast" class="hidden"></div>
   </div>
 
-  <script>
-    if ('serviceWorker' in navigator &&
-        (location.protocol === 'https:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1')) {
-      window.addEventListener('load', () => {
-        navigator.serviceWorker.register('sw.js').catch(() => {});
-      });
-    }
-  </script>
+  <!-- External file: inline scripts would be blocked by the script-src 'self' CSP. -->
+  <script src="js/boot.js"></script>
   <script type="module" src="js/main.js"></script>
 </body>
 </html>

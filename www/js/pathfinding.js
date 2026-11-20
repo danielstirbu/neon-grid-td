@@ -107,6 +107,12 @@ export class Pathfinder {
     return this.dist[this.idx(col, row)];
   }
 
+  // True when a live path from this cell to the core still exists (L-01).
+  isReachableFromCore(col, row) {
+    if (!this.inBounds(col, row)) return false;
+    return this.dist[this.idx(col, row)] >= 0;
+  }
+
   // Unit-space next waypoint toward the core from a float position.
   nextStep(fx, fy) {
     const col = Math.floor(fx);

@@ -22,6 +22,36 @@ function mix(hex, target, amt) {
 export const lighten = (hex, amt = 0.45) => mix(hex, '#ffffff', amt);
 export const darken = (hex, amt = 0.45) => mix(hex, '#000000', amt);
 
+// P-03: gradient cache. Art gradients depend only on unit-space coords scaled by
+// s, so each unique (key, s, stops) combo is allocated once per resize instead of
+// once per frame. Dynamic ones are cached as unit gradients (0..1) and stretched
+// with the canvas transform at draw time — pixel-identical, zero per-frame GC.
+const gradCache = new Map();
+
+export function clearGradCache() {
+  gradCache.clear();
+}
+
+function cachedLinear(ctx, key, x0, y0, x1, y1, stops) {
+  let g = gradCache.get(key);
+  if (!g) {
+    g = ctx.createLinearGradient(x0, y0, x1, y1);
+    for (const [o, c] of stops) g.addColorStop(o, c);
+    gradCache.set(key, g);
+  }
+  return g;
+}
+
+function cachedRadial(ctx, key, x0, y0, r0, x1, y1, r1, stops) {
+  let g = gradCache.get(key);
+  if (!g) {
+    g = ctx.createRadialGradient(x0, y0, r0, x1, y1, r1);
+    for (const [o, c] of stops) g.addColorStop(o, c);
+    gradCache.set(key, g);
+  }
+  return g;
+}
+
 export function rr(ctx, x, y, w, h, r) {
   const rad = Math.max(0, Math.min(r, w / 2, h / 2));
   ctx.beginPath();
@@ -113,11 +143,11 @@ export function ink(ctx, s, k = 1) {
 }
 
 function paint(ctx, color, s) {
-  const g = ctx.createLinearGradient(0, -s, 0, s);
-  g.addColorStop(0, lighten(color, 0.5));
-  g.addColorStop(0.52, color);
-  g.addColorStop(1, darken(color, 0.3));
-  ctx.fillStyle = g;
+  ctx.fillStyle = cachedLinear(ctx, `paint:${color}:${s}`, 0, -s, 0, s, [
+    [0, lighten(color, 0.5)],
+    [0.52, color],
+    [1, darken(color, 0.3)],
+  ]);
   ctx.fill();
 }
 
@@ -388,11 +418,11 @@ function octPath(ctx, r, squash = 0.72) {
 }
 
 function metalGrad(ctx, s, y0, y1, top = '#57668a', mid = '#2c3752', bot = '#151b2c') {
-  const g = ctx.createLinearGradient(0, s * y0, 0, s * y1);
-  g.addColorStop(0, top);
-  g.addColorStop(0.45, mid);
-  g.addColorStop(1, bot);
-  return g;
+  return cachedLinear(ctx, `metal:${s}:${y0}:${y1}:${top}:${mid}:${bot}`, 0, s * y0, 0, s * y1, [
+    [0, top],
+    [0.45, mid],
+    [1, bot],
+  ]);
 }
 
 // Family look shared by every turret: octagonal tech pad with emissive rim,
@@ -401,11 +431,11 @@ function techPad(ctx, s, color, bob, glow) {
   ctx.save();
   ctx.translate(0, s * 0.42 + bob);
   octPath(ctx, s * 0.95);
-  const pad = ctx.createLinearGradient(0, -s * 0.72, 0, s * 0.72);
-  pad.addColorStop(0, '#39445f');
-  pad.addColorStop(0.5, '#232c44');
-  pad.addColorStop(1, '#141a2c');
-  ctx.fillStyle = pad;
+  ctx.fillStyle = cachedLinear(ctx, `techPad:${s}`, 0, -s * 0.72, 0, s * 0.72, [
+    [0, '#39445f'],
+    [0.5, '#232c44'],
+    [1, '#141a2c'],
+  ]);
   ctx.fill();
   ctx.strokeStyle = 'rgba(8,12,22,0.9)';
   ctx.lineWidth = Math.max(1, s * 0.06);
@@ -462,10 +492,11 @@ function pulseArt(ctx, t, s, time, bob) {
   ctx.translate(-s * 0.2 * heat, 0);
 
   // dual plasma rails
-  const railG = ctx.createLinearGradient(0, -s * 0.42, 0, s * 0.42);
-  railG.addColorStop(0, '#4a5878');
-  railG.addColorStop(0.5, '#2b3550');
-  railG.addColorStop(1, '#171d30');
+  const railG = cachedLinear(ctx, `pulseRail:${s}`, 0, -s * 0.42, 0, s * 0.42, [
+    [0, '#4a5878'],
+    [0.5, '#2b3550'],
+    [1, '#171d30'],
+  ]);
   for (const ry of [-s * 0.3, s * 0.3]) {
     chamferPath(ctx, [[s * 0.1, ry - s * 0.12], [s * 1.32, ry - s * 0.08], [s * 1.4, ry], [s * 1.32, ry + s * 0.08], [s * 0.1, ry + s * 0.12]]);
     ctx.fillStyle = railG;
@@ -506,18 +537,22 @@ function pulseArt(ctx, t, s, time, bob) {
     ctx.restore();
   }
 
-  // plasma core orb between the rail tips
+  // plasma core orb between the rail tips — unit gradient scaled by the transform
   ctx.save();
   ctx.globalCompositeOperation = 'lighter';
   const orb = s * (0.24 + 0.07 * idle + 0.3 * heat);
-  const og = ctx.createRadialGradient(s * 1.34, 0, 0, s * 1.34, 0, orb);
-  og.addColorStop(0, 'rgba(255,255,255,0.95)');
-  og.addColorStop(0.35, color);
-  og.addColorStop(1, 'rgba(0,229,255,0)');
-  ctx.fillStyle = og;
+  ctx.save();
+  ctx.translate(s * 1.34, 0);
+  ctx.scale(orb, orb);
+  ctx.fillStyle = cachedRadial(ctx, `pulseOrb:${color}`, 0, 0, 0, 0, 0, 1, [
+    [0, 'rgba(255,255,255,0.95)'],
+    [0.35, color],
+    [1, 'rgba(0,229,255,0)'],
+  ]);
   ctx.beginPath();
-  ctx.arc(s * 1.34, 0, orb, 0, Math.PI * 2);
+  ctx.arc(0, 0, 1, 0, Math.PI * 2);
   ctx.fill();
+  ctx.restore();
   // arcing between the rail tips
   const arcA = heat > 0.15 ? heat : idle > 0.86 ? 0.5 : 0;
   if (arcA > 0) {
@@ -537,14 +572,19 @@ function pulseArt(ctx, t, s, time, bob) {
   if (heat > 0.3) {
     // muzzle flare + shockwave ring on fire
     const len = s * (0.4 + 0.7 * heat);
-    const fg = ctx.createRadialGradient(s * 1.45, 0, 0, s * 1.45, 0, len);
-    fg.addColorStop(0, `rgba(255,255,255,${0.9 * heat})`);
-    fg.addColorStop(0.4, `rgba(140,240,255,${0.55 * heat})`);
-    fg.addColorStop(1, 'rgba(0,229,255,0)');
-    ctx.fillStyle = fg;
+    ctx.save();
+    ctx.globalAlpha *= heat;
+    ctx.translate(s * 1.45, 0);
+    ctx.scale(len, len);
+    ctx.fillStyle = cachedRadial(ctx, 'pulseFlare', 0, 0, 0, 0, 0, 1, [
+      [0, 'rgba(255,255,255,0.9)'],
+      [0.4, 'rgba(140,240,255,0.55)'],
+      [1, 'rgba(0,229,255,0)'],
+    ]);
     ctx.beginPath();
-    ctx.arc(s * 1.45, 0, len, 0, Math.PI * 2);
+    ctx.arc(0, 0, 1, 0, Math.PI * 2);
     ctx.fill();
+    ctx.restore();
     ctx.globalAlpha = heat * 0.8;
     ctx.strokeStyle = '#bff4ff';
     ctx.lineWidth = Math.max(1, s * 0.07 * heat);
@@ -559,11 +599,11 @@ function pulseArt(ctx, t, s, time, bob) {
     [-s * 0.62, -s * 0.3], [s * 0.16, -s * 0.44], [s * 0.5, -s * 0.2],
     [s * 0.5, s * 0.2], [s * 0.16, s * 0.44], [-s * 0.62, s * 0.3],
   ]);
-  const body = ctx.createLinearGradient(0, -s * 0.44, 0, s * 0.44);
-  body.addColorStop(0, '#57668a');
-  body.addColorStop(0.42, '#2c3752');
-  body.addColorStop(1, '#151b2c');
-  ctx.fillStyle = body;
+  ctx.fillStyle = cachedLinear(ctx, `pulseHousing:${s}`, 0, -s * 0.44, 0, s * 0.44, [
+    [0, '#57668a'],
+    [0.42, '#2c3752'],
+    [1, '#151b2c'],
+  ]);
   ctx.fill();
   ctx.strokeStyle = edge;
   ctx.lineWidth = Math.max(1, s * 0.05);
@@ -705,10 +745,11 @@ function cryoArt(ctx, t, s, time, bob) {
   // levitation field beam
   ctx.save();
   ctx.globalCompositeOperation = 'lighter';
-  const beam = ctx.createLinearGradient(0, s * 0.42, 0, 0);
-  beam.addColorStop(0, `rgba(160,255,225,${0.35 + 0.2 * idle})`);
-  beam.addColorStop(1, 'rgba(160,255,225,0)');
-  ctx.fillStyle = beam;
+  ctx.globalAlpha = 0.35 + 0.2 * idle;
+  ctx.fillStyle = cachedLinear(ctx, `cryoBeam:${s}`, 0, s * 0.42, 0, 0, [
+    [0, 'rgba(160,255,225,1)'],
+    [1, 'rgba(160,255,225,0)'],
+  ]);
   ctx.fillRect(-s * 0.2, 0, s * 0.4, s * 0.44);
   ctx.restore();
 
@@ -742,23 +783,30 @@ function cryoArt(ctx, t, s, time, bob) {
   ctx.save();
   ctx.globalCompositeOperation = 'lighter';
   const h = s * (0.7 + 0.06 * idle);
-  const glowG = ctx.createRadialGradient(0, 0, 0, 0, 0, h);
-  glowG.addColorStop(0, `rgba(190,255,240,${0.5 + 0.3 * heat})`);
-  glowG.addColorStop(1, 'rgba(0,255,157,0)');
-  ctx.fillStyle = glowG;
+  ctx.save();
+  ctx.globalAlpha = 0.5 + 0.3 * heat;
+  ctx.scale(h, h);
+  ctx.fillStyle = cachedRadial(ctx, 'cryoGlow', 0, 0, 0, 0, 0, 1, [
+    [0, 'rgba(190,255,240,1)'],
+    [1, 'rgba(0,255,157,0)'],
+  ]);
   ctx.beginPath();
-  ctx.arc(0, 0, h, 0, Math.PI * 2);
+  ctx.arc(0, 0, 1, 0, Math.PI * 2);
   ctx.fill();
+  ctx.restore();
   ctx.restore();
   const spin = time * 1.2 + seed;
   const hw = s * (0.12 + 0.24 * Math.abs(Math.cos(spin)));
   chamferPath(ctx, [[0, -h * 0.62], [hw, -h * 0.04], [0, h * 0.62], [-hw, -h * 0.04]]);
-  const ice = ctx.createLinearGradient(-hw, 0, hw, 0);
-  ice.addColorStop(0, '#eafffb');
-  ice.addColorStop(0.5, color);
-  ice.addColorStop(1, '#0f6f66');
-  ctx.fillStyle = ice;
+  ctx.save();
+  ctx.scale(hw || 1, 1);
+  ctx.fillStyle = cachedLinear(ctx, `cryoIce:${color}`, -1, 0, 1, 0, [
+    [0, '#eafffb'],
+    [0.5, color],
+    [1, '#0f6f66'],
+  ]);
   ctx.fill();
+  ctx.restore();
   ctx.strokeStyle = edge;
   ctx.lineWidth = Math.max(1, s * 0.04);
   ctx.stroke();
@@ -856,15 +904,19 @@ function arcArt(ctx, t, s, time, bob) {
   const by = -s * 0.34;
   ctx.save();
   ctx.globalCompositeOperation = 'lighter';
-  const orb = s * (0.2 + 0.05 * idle + 0.22 * heat);
-  const og = ctx.createRadialGradient(0, by, 0, 0, by, orb * 1.6);
-  og.addColorStop(0, 'rgba(240,225,255,0.95)');
-  og.addColorStop(0.4, color);
-  og.addColorStop(1, 'rgba(179,102,255,0)');
-  ctx.fillStyle = og;
+  const orb = s * (0.2 + 0.05 * idle + 0.22 * heat) * 1.6;
+  ctx.save();
+  ctx.translate(0, by);
+  ctx.scale(orb, orb);
+  ctx.fillStyle = cachedRadial(ctx, `arcOrb:${color}`, 0, 0, 0, 0, 0, 1, [
+    [0, 'rgba(240,225,255,0.95)'],
+    [0.4, color],
+    [1, 'rgba(179,102,255,0)'],
+  ]);
   ctx.beginPath();
-  ctx.arc(0, by, orb * 1.6, 0, Math.PI * 2);
+  ctx.arc(0, 0, 1, 0, Math.PI * 2);
   ctx.fill();
+  ctx.restore();
   // discharge arcs ball -> prong tips
   const storm = heat > 0.1 ? heat : idle > 0.88 ? 0.45 : 0;
   if (storm > 0) {
@@ -974,20 +1026,31 @@ function railArt(ctx, t, s, time, bob) {
   // muzzle: rail prongs with inter-tip glow
   ctx.save();
   ctx.globalCompositeOperation = 'lighter';
-  const mg = ctx.createRadialGradient(s * (len + 0.08), 0, 0, s * (len + 0.08), 0, s * (0.2 + 0.5 * heat));
-  mg.addColorStop(0, `rgba(255,246,180,${0.5 + 0.5 * heat})`);
-  mg.addColorStop(1, 'rgba(255,230,0,0)');
-  ctx.fillStyle = mg;
+  const mr = s * (0.2 + 0.5 * heat);
+  ctx.save();
+  ctx.globalAlpha = 0.5 + 0.5 * heat;
+  ctx.translate(s * (len + 0.08), 0);
+  ctx.scale(mr, mr);
+  ctx.fillStyle = cachedRadial(ctx, 'railMuzzle', 0, 0, 0, 0, 0, 1, [
+    [0, 'rgba(255,246,180,1)'],
+    [1, 'rgba(255,230,0,0)'],
+  ]);
   ctx.beginPath();
-  ctx.arc(s * (len + 0.08), 0, s * (0.2 + 0.5 * heat), 0, Math.PI * 2);
+  ctx.arc(0, 0, 1, 0, Math.PI * 2);
   ctx.fill();
+  ctx.restore();
   if (heat > 0.35) {
     // hyper-velocity slug lance
-    const lg = ctx.createLinearGradient(s * len, 0, s * (len + 1.4 * heat), 0);
-    lg.addColorStop(0, `rgba(255,255,255,${heat})`);
-    lg.addColorStop(1, 'rgba(255,230,0,0)');
-    ctx.fillStyle = lg;
-    ctx.fillRect(s * len, -s * 0.05 * heat, s * 1.4 * heat, s * 0.1 * heat);
+    ctx.save();
+    ctx.globalAlpha = heat;
+    ctx.translate(s * len, 0);
+    ctx.scale(s * 1.4 * heat, 1);
+    ctx.fillStyle = cachedLinear(ctx, 'railLance', 0, 0, 1, 0, [
+      [0, 'rgba(255,255,255,1)'],
+      [1, 'rgba(255,230,0,0)'],
+    ]);
+    ctx.fillRect(0, -s * 0.05 * heat, 1, s * 0.1 * heat);
+    ctx.restore();
   }
   ctx.restore();
 

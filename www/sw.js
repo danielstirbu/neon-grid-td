@@ -1,5 +1,5 @@
 /* Neon Grid TD service worker — cache-first, 100% offline after first load. */
-const CACHE = 'neon-grid-td-v5';
+const CACHE = 'neon-grid-td-v6';
 
 const PRECACHE = [
   './',
@@ -16,8 +16,10 @@ const PRECACHE = [
   './js/entities.js',
   './js/waves.js',
   './js/renderer.js',
+  './js/toon.js',
   './js/landscape.js',
   './js/ui.js',
+  './js/boot.js',
 ];
 
 self.addEventListener('install', (event) => {
@@ -46,15 +48,24 @@ self.addEventListener('fetch', (event) => {
 
   // Navigations: network-first so updates land, cache fallback keeps it offline.
   if (req.mode === 'navigate') {
-    event.respondWith(
-      fetch(req)
-        .then((res) => {
-          const copy = res.clone();
-          caches.open(CACHE).then((cache) => cache.put('./index.html', copy));
-          return res;
-        })
-        .catch(() => caches.match('./index.html'))
-    );
+    event.respondWith((async () => {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 3000);
+      try {
+        const res = await fetch(req, { signal: ctrl.signal });
+        if (res.ok) {
+          // Only cache successful responses; a captive-portal or 500 page must
+          // never replace index.html in the cache.
+          const cache = await caches.open(CACHE);
+          await cache.put('./index.html', res.clone());
+        }
+        return res;
+      } catch {
+        return (await caches.match('./index.html')) || Response.error();
+      } finally {
+        clearTimeout(timer);
+      }
+    })());
     return;
   }
 

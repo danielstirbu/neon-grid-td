@@ -1,8 +1,33 @@
 // renderer.js — Canvas 2D at native DPR: meadow backdrop, grid, towers, enemies, projectiles, beams, VFX.
 // Characters are drawn with the toon.js cartoon helpers; projectiles/beams/particles stay neon.
 import { GRID, PALETTE } from './config.js';
-import { drawToonEnemy, drawToonTower, toonText } from './toon.js';
+import { drawToonEnemy, drawToonTower, toonText, clearGradCache } from './toon.js';
 import { Landscape } from './landscape.js';
+
+// P-06: pre-rendered 64px white radial glow, tinted via 'source-atop' per color.
+// Replaces per-projectile/per-beam shadowBlur (1-3 ms per call on mobile GPUs).
+const GLOW_COLORS = [
+  'DEFAULT', PALETTE.cyan, PALETTE.green, PALETTE.magenta, PALETTE.yellow, PALETTE.danger,
+];
+
+function makeGlowSprite(color) {
+  const c = document.createElement('canvas');
+  c.width = 64;
+  c.height = 64;
+  const g = c.getContext('2d');
+  const grad = g.createRadialGradient(32, 32, 1, 32, 32, 32);
+  grad.addColorStop(0, 'rgba(255,255,255,0.95)');
+  grad.addColorStop(0.4, 'rgba(255,255,255,0.45)');
+  grad.addColorStop(1, 'rgba(255,255,255,0)');
+  g.fillStyle = grad;
+  g.fillRect(0, 0, 64, 64);
+  if (color !== 'DEFAULT') {
+    g.globalCompositeOperation = 'source-atop';
+    g.fillStyle = color;
+    g.fillRect(0, 0, 64, 64);
+  }
+  return c;
+}
 
 export class Renderer {
   constructor(canvas) {
@@ -14,7 +39,18 @@ export class Renderer {
     this.oy = 0;
     this.time = 0; // seconds since load, drives toon idle animations
     this.landscape = new Landscape();
+    this.glowSprites = new Map();
+    for (const color of GLOW_COLORS) this.glowSprites.set(color, makeGlowSprite(color));
     this.resize();
+  }
+
+  _glow(color) {
+    let sprite = this.glowSprites.get(color);
+    if (!sprite) {
+      sprite = makeGlowSprite(color);
+      this.glowSprites.set(color, sprite);
+    }
+    return sprite;
   }
 
   resize() {
@@ -36,6 +72,7 @@ export class Renderer {
       w: this.cell * GRID.cols,
       h: this.cell * GRID.rows,
     });
+    clearGradCache(); // P-03: toon gradients are keyed by cell size s; drop stale entries
   }
 
   // Screen CSS px -> grid float coords
@@ -173,31 +210,66 @@ export class Renderer {
 
   drawProjectile(p) {
     const { ctx, cell } = this;
+    const x = this.sx(p.x);
+    const y = this.sy(p.y);
+    const r = cell * 0.28;
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.globalAlpha = 0.55;
+    ctx.drawImage(this._glow(p.color), x - r, y - r, r * 2, r * 2);
+    ctx.restore();
     ctx.save();
     ctx.fillStyle = p.color;
-    ctx.shadowColor = p.color;
-    ctx.shadowBlur = cell * 0.3;
     ctx.beginPath();
-    ctx.arc(this.sx(p.x), this.sy(p.y), cell * 0.09, 0, Math.PI * 2);
+    ctx.arc(x, y, cell * 0.09, 0, Math.PI * 2);
     ctx.fill();
     ctx.restore();
   }
 
-  drawBeam(b) {
-    const { ctx, cell } = this;
-    const a = Math.max(0, b.time / b.maxTime);
-    ctx.save();
-    ctx.globalAlpha = a;
-    ctx.strokeStyle = b.color;
-    ctx.shadowColor = b.color;
-    ctx.shadowBlur = cell * 0.4;
-    ctx.lineWidth = Math.max(1.5, b.width * cell * a);
+  // Draw one polyline pass; widths/alphas in CSS px / fraction.
+  _beamPath(b, width, alpha) {
+    const { ctx } = this;
+    ctx.globalAlpha = alpha;
+    ctx.lineWidth = width;
     ctx.beginPath();
     for (let i = 0; i < b.points.length; i++) {
       const pt = b.points[i];
       i === 0 ? ctx.moveTo(this.sx(pt.x), this.sy(pt.y)) : ctx.lineTo(this.sx(pt.x), this.sy(pt.y));
     }
     ctx.stroke();
+  }
+
+  drawBeam(b) {
+    const { ctx, cell } = this;
+    const a = Math.max(0, b.time / b.maxTime);
+    const w = Math.max(1.5, b.width * cell * a);
+    // Soft halo via glow sprites along the polyline — shadowBlur is too expensive
+    // per beam (P-06); 'lighter' keeps the neon additive look.
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    const sprite = this._glow(b.color);
+    const gr = Math.max(6, w * 2.6);
+    for (let i = 1; i < b.points.length; i++) {
+      const x0 = this.sx(b.points[i - 1].x);
+      const y0 = this.sy(b.points[i - 1].y);
+      const x1 = this.sx(b.points[i].x);
+      const y1 = this.sy(b.points[i].y);
+      const seg = Math.hypot(x1 - x0, y1 - y0);
+      const steps = Math.max(1, Math.min(10, Math.ceil(seg / gr)));
+      for (let k = 0; k <= steps; k++) {
+        const t = k / steps;
+        ctx.globalAlpha = a * 0.35;
+        ctx.drawImage(sprite, x0 + (x1 - x0) * t - gr, y0 + (y1 - y0) * t - gr, gr * 2, gr * 2);
+      }
+    }
+    ctx.restore();
+    ctx.save();
+    ctx.strokeStyle = b.color;
+    ctx.lineCap = 'round';
+    this._beamPath(b, w, a);
+    // hot core line keeps the beam legible against the halo
+    ctx.strokeStyle = '#ffffff';
+    this._beamPath(b, Math.max(1, w * 0.35), a * 0.8);
     ctx.restore();
   }
 

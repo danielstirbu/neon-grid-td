@@ -1,11 +1,15 @@
 // audio.js — procedural Web Audio synthesis, no assets. iOS needs resume() on first tap.
 
 class AudioEngine {
+  static MAX_SOUNDS_PER_100MS = 12;
+
   constructor() {
     this.ctx = null;
     this.master = null;
     this.enabled = true;
     this.unlocked = false;
+    this._winStart = 0;
+    this._winCount = 0;
   }
 
   ensure() {
@@ -51,30 +55,49 @@ class AudioEngine {
     osc.type = type;
     osc.frequency.setValueAtTime(freq, t0);
     if (glide) osc.frequency.exponentialRampToValueAtTime(Math.max(30, freq + glide), t0 + dur);
-    this._env(osc, t0, peak, attack, dur);
+    const g = this._env(osc, t0, peak, attack, dur);
+    osc.onended = () => { try { osc.disconnect(); g.disconnect(); } catch {} };
     osc.start(t0);
     osc.stop(t0 + dur + 0.05);
   }
 
-  _noise({ t0, dur = 0.15, peak = 0.4, freq = 1200, q = 1 }) {
-    const len = Math.max(1, Math.floor(this.ctx.sampleRate * dur));
+  // P-04: one 1-second white-noise buffer for the whole session, looped per
+  // playback; per-sound color comes from the bandpass filter, not new samples.
+  _noiseBuffer() {
+    if (this._noiseBuf) return this._noiseBuf;
+    const len = this.ctx.sampleRate;
     const buf = this.ctx.createBuffer(1, len, this.ctx.sampleRate);
     const d = buf.getChannelData(0);
     for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+    this._noiseBuf = buf;
+    return buf;
+  }
+
+  _noise({ t0, dur = 0.15, peak = 0.4, freq = 1200, q = 1 }) {
     const src = this.ctx.createBufferSource();
-    src.buffer = buf;
+    src.buffer = this._noiseBuffer();
+    src.loop = true;
     const bp = this.ctx.createBiquadFilter();
     bp.type = 'bandpass';
     bp.frequency.value = freq;
     bp.Q.value = q;
     src.connect(bp);
-    this._env(bp, t0, peak, 0.004, dur);
+    const g = this._env(bp, t0, peak, 0.004, dur);
+    src.onended = () => { try { src.disconnect(); bp.disconnect(); g.disconnect(); } catch {} };
     src.start(t0);
     src.stop(t0 + dur + 0.02);
   }
 
   play(name) {
     if (!this.ready) return;
+    // Rate-limiter: many towers firing at once produce sounds that are individually
+    // imperceptible but leak nodes and steal headroom. Drop the excess.
+    const now = Date.now();
+    if (now - this._winStart >= 100) {
+      this._winStart = now;
+      this._winCount = 0;
+    }
+    if (++this._winCount > AudioEngine.MAX_SOUNDS_PER_100MS) return;
     const t = this.ctx.currentTime;
     switch (name) {
       case 'tap':       this._tone(660, { type: 'square', t0: t, dur: 0.05, peak: 0.22 }); break;

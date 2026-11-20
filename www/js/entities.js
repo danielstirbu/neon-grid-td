@@ -290,6 +290,9 @@ export class FloatingText {
   }
 }
 
+const MAX_PARTICLES = 240; // P-09: hard ceiling; bursts drop excess particles instead of growing unbounded
+
 export function burst(list, x, y, color, n = 10, speed = 2.4, time = 0.45, size) {
-  for (let i = 0; i < n; i++) list.push(new Particle(x, y, color, speed, time * (0.6 + Math.random() * 0.7), size));
+  const count = Math.max(0, Math.min(n, MAX_PARTICLES - list.length));
+  for (let i = 0; i < count; i++) list.push(new Particle(x, y, color, speed, time * (0.6 + Math.random() * 0.7), size));
 }

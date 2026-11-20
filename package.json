@@ -9,9 +9,9 @@
     "check": "node --check www/js/config.js && node --check www/js/landscape.js && node --check www/js/audio.js && node --check www/js/pathfinding.js && node --check www/js/entities.js && node --check www/js/waves.js && node --check www/js/renderer.js && node --check www/js/ui.js && node --check www/js/main.js",
     "test": "node tools/smoke-test.mjs",
     "verify": "npm run check && npm run test",
-    "cap:android": "npx cap add android",
-    "cap:ios": "npx cap add ios",
-    "cap:sync": "npx cap sync"
+    "cap:android": "cap add android",
+    "cap:ios": "cap add ios",
+    "cap:sync": "cap sync"
   },
   "keywords": [
     "tower-defense",
@@ -25,6 +25,10 @@
   "author": "danielstirbu",
   "license": "MIT",
   "devDependencies": {
+    "@capacitor/android": "^6.2.0",
+    "@capacitor/cli": "^6.2.0",
+    "@capacitor/core": "^6.2.0",
+    "@capacitor/ios": "^6.2.0",
     "playwright": "^1.65.1"
   },
   "engines": {

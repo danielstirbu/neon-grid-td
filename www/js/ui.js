@@ -3,6 +3,11 @@ import { TOWERS, TOWER_ORDER, ECONOMY } from './config.js';
 import { audio } from './audio.js';
 
 const $ = (id) => document.getElementById(id);
+const HEX_COLOR = /^#[0-9a-f]{6}$/i;
+
+function safeColor(value) {
+  return HEX_COLOR.test(String(value)) ? value : 'inherit';
+}
 
 export class UI {
   constructor(game) {
@@ -16,6 +21,7 @@ export class UI {
       tmUpgrade: $('tm-upgrade'), tmUpCost: $('tm-up-cost'), tmSell: $('tm-sell'),
       tmSellVal: $('tm-sell-val'), tmTarget: $('tm-target'), tmClose: $('tm-close'),
       screenStart: $('screen-start'), screenOver: $('screen-over'),
+      pauseOverlay: $('screen-pause'), btnResume: $('btn-resume'),
       btnPlay: $('btn-play'), btnEndless: $('btn-endless'),
       overTitle: $('over-title'), overDetail: $('over-detail'),
       btnRetry: $('btn-retry'), btnMenu: $('btn-menu'),
@@ -39,10 +45,18 @@ export class UI {
       const t = TOWERS[key];
       const card = document.createElement('button');
       card.className = 'tower-card';
-      card.innerHTML =
-        `<span class="glyph" style="color:${t.color}">${t.glyph}</span>` +
-        `<span>${t.name.split(' ')[0].toUpperCase()}</span>` +
-        `<span class="cost">¤${t.cost}</span>`;
+      // Build nodes via the DOM API: no HTML string interpolation, so a hostile
+      // name/glyph cannot inject markup and a hostile color cannot inject CSS.
+      const glyph = document.createElement('span');
+      glyph.className = 'glyph';
+      glyph.textContent = t.glyph;
+      glyph.style.color = safeColor(t.color);
+      const label = document.createElement('span');
+      label.textContent = t.name.split(' ')[0].toUpperCase();
+      const cost = document.createElement('span');
+      cost.className = 'cost';
+      cost.textContent = `¤${t.cost}`;
+      card.append(glyph, label, cost);
       card.title = `${t.name} — ${t.desc}`;
       card.addEventListener('pointerdown', (e) => {
         e.stopPropagation();
@@ -77,6 +91,11 @@ export class UI {
     els.tmClose.addEventListener('pointerdown', (e) => {
       e.stopPropagation();
       this.closeTowerMenu();
+    });
+    els.btnResume?.addEventListener('pointerdown', (e) => {
+      e.stopPropagation();
+      audio.unlock();
+      this.game.togglePause();
     });
     els.tmUpgrade.addEventListener('pointerdown', (e) => {
       e.stopPropagation();
@@ -119,6 +138,7 @@ export class UI {
       card.classList.toggle('selected', k === this.selectedTowerKey);
     }
     if (this.selectedTowerKey) this.game.clearSelectedTower();
+    this.game.requestRender();
   }
 
   clearTowerSelect() {
@@ -155,24 +175,47 @@ export class UI {
     this.menuTower = null;
     this.els.menu.classList.add('hidden');
     this.game.clearSelectedTower();
+    this.game.requestRender();
   }
 
   updateHUD(game) {
+    // P-05: write the DOM only when something actually changed (was 60 Hz).
     const { els } = this;
-    els.wave.textContent = game.endless ? `∞ ${game.wave}` : `${game.wave}/${game.totalWaves}`;
-    els.cash.textContent = game.cash;
-    els.core.textContent = game.core;
-    els.coreStat.classList.toggle('low', game.core <= 5);
-    for (const key of TOWER_ORDER) {
-      this.dockCards[key].classList.toggle('unaffordable', game.cash < TOWERS[key].cost);
+    const sig = `${game.wave}|${game.cash}|${game.core}|${game.endless}|${game.waveActive}|` +
+      `${game.state}|${game.paused}|${game.speedIndex}|${audio.enabled}|${game.totalWaves}` +
+      (this.menuTower ? `|${this.menuTower.level}${this.menuTower.targetMode}` : '');
+    if (sig === this._hudSig) return;
+    this._hudSig = sig;
+
+    const waveTxt = game.endless ? `∞ ${game.wave}` : `${game.wave}/${game.totalWaves}`;
+    if (waveTxt !== this._waveTxt) { els.wave.textContent = waveTxt; this._waveTxt = waveTxt; }
+    if (this._cash !== game.cash) {
+      els.cash.textContent = game.cash;
+      this._cash = game.cash;
+      for (const key of TOWER_ORDER) {
+        this.dockCards[key].classList.toggle('unaffordable', game.cash < TOWERS[key].cost);
+      }
     }
-    els.nextWave.disabled = game.waveActive || game.state !== 'playing';
-    els.nextWave.textContent = game.wave === 0 ? 'START WAVE ▸' :
+    if (this._core !== game.core) {
+      els.core.textContent = game.core;
+      els.coreStat.classList.toggle('low', game.core <= 5);
+      this._core = game.core;
+    }
+    const disabled = game.waveActive || game.state !== 'playing';
+    if (this._nextDisabled !== disabled) { els.nextWave.disabled = disabled; this._nextDisabled = disabled; }
+    const nextTxt = game.wave === 0 ? 'START WAVE ▸' :
       (game.wave >= game.totalWaves && !game.endless ? 'FINAL ▸' : `WAVE ${game.wave + 1} ▸`);
-    els.btnPause.textContent = game.paused ? '▶' : '❚❚';
-    els.btnSpeed.textContent = game.speedIndex > 0 ? '▶▶' : '▶';
-    els.btnSpeed.classList.toggle('hot', game.speedIndex > 0);
-    els.btnSound.classList.toggle('off', !audio.enabled);
+    if (nextTxt !== this._nextTxt) { els.nextWave.textContent = nextTxt; this._nextTxt = nextTxt; }
+    const pauseTxt = game.paused ? '▶' : '❚❚';
+    if (pauseTxt !== this._pauseTxt) { els.btnPause.textContent = pauseTxt; this._pauseTxt = pauseTxt; }
+    const hot = game.speedIndex > 0;
+    if (this._hot !== hot) {
+      els.btnSpeed.textContent = hot ? '▶▶' : '▶';
+      els.btnSpeed.classList.toggle('hot', hot);
+      this._hot = hot;
+    }
+    const muted = !audio.enabled;
+    if (this._muted !== muted) { els.btnSound.classList.toggle('off', muted); this._muted = muted; }
     if (this.menuTower) this.refreshTowerMenu();
   }
 
@@ -210,10 +253,22 @@ export class UI {
     this.els.overTitle.textContent = title;
     this.els.overDetail.textContent = detail;
     this.els.screenOver.classList.remove('hidden');
+    this.closeTowerMenuSilent();
+    this.hidePauseOverlay();
   }
 
   hideOver() {
     this.els.screenOver.classList.add('hidden');
+  }
+
+  showPauseOverlay() {
+    if (!this.els.pauseOverlay) return;
+    this.els.pauseOverlay.classList.remove('hidden');
+  }
+
+  hidePauseOverlay() {
+    if (!this.els.pauseOverlay) return;
+    this.els.pauseOverlay.classList.add('hidden');
   }
 
   closeTowerMenuSilent() {
