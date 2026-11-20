@@ -51,7 +51,11 @@
 
     <footer id="dock" aria-label="Tower dock">
       <div id="tower-dock"></div>
-      <button id="btn-next-wave" class="primary-btn">START WAVE ▸</button>
+      <div id="piece-row">
+        <div id="piece-cards" aria-label="Road piece queue"></div>
+        <button id="btn-rotate" class="ghost-btn" disabled title="Rotate (R)">ROTATE ↻</button>
+        <button id="btn-next-wave" class="primary-btn">START WAVE ▸</button>
+      </div>
     </footer>
 
     <!-- Contextual tower menu (upgrade / focus target / sell) -->
@@ -77,7 +81,7 @@
         <p class="tagline">Hold the grid. Defend the core.</p>
         <button id="btn-play" class="primary-btn big">▸ PLAY CAMPAIGN</button>
         <button id="btn-endless" class="ghost-btn wide">∞ ENDLESS MODE</button>
-        <p class="hint">Tap a platform next to the neon lane to place a turret. Enemies march the serpentine lane — build on platforms only.</p>
+        <p class="hint">Pick a road piece from the queue, rotate it (R) and extend the lane. Portals mark where enemies enter — turrets only build on platforms.</p>
       </div>
     </div>
 

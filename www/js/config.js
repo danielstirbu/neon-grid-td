@@ -45,27 +45,27 @@ export const INITIAL_ROAD = [0, 1, 2].map((i) => ({
 // (portal candidate); facing a tower or the core body is rejected.
 export const TILE_PIECES = {
   SINGLE_STRAIGHT: {
-    name: 'Straight', size: 1, cost: 0,
+    name: 'Straight', glyph: '│', size: 1, cost: 0,
     cells: [{ c: 0, r: 0 }], ports: [[0, 2]],
   },
   SINGLE_TURN: {
-    name: 'Turn', size: 1, cost: 0,
+    name: 'Turn', glyph: '└', size: 1, cost: 0,
     cells: [{ c: 0, r: 0 }], ports: [[0, 1]],
   },
   DOUBLE_STRAIGHT: {
-    name: 'Long Straight', size: 2, cost: 0,
+    name: 'Long', glyph: '═', size: 2, cost: 0,
     cells: [{ c: 0, r: 0 }, { c: 0, r: 1 }], ports: [[0, 2], [0, 2]],
   },
   // Joint: cell0.S <-> cell1.N; dangling cell0.E and cell1.S form an E→S bend.
   DOUBLE_L: {
-    name: 'L-Bend', size: 2, cost: 0,
+    name: 'L-Bend', glyph: '┗', size: 2, cost: 0,
     cells: [{ c: 0, r: 0 }, { c: 0, r: 1 }], ports: [[1, 2], [0, 2]],
   },
   // Stem cell carries the through N–S line plus one E branch; the tip cell
   // extends the branch (W–E) and dangles E. Placed with its S port on an open
   // end it keeps the line going (N) AND opens a second SPAWN portal at E.
   DOUBLE_T: {
-    name: 'T-Junction', size: 2, cost: 0,
+    name: 'T-Joint', glyph: '┣', size: 2, cost: 0,
     cells: [{ c: 0, r: 0 }, { c: 1, r: 0 }], ports: [[0, 1, 2], [3, 1]],
   },
 };
@@ -103,6 +103,12 @@ export const ECONOMY = {
   startCore: 20,
   sellRatio: 0.6,
   waveBonus: (wave) => 18 + wave * 3,
+  // Tile-builder wave clock + piece queue.
+  waveCountdownFirst: 15, // s before wave 1
+  waveCountdown: 12, // s between waves
+  earlyWaveBonus: 5, // cash for starting a wave ahead of the timer
+  pieceHandSize: 2, // queue/hand size
+  firstWavePrepPieces: 2, // placements expected (auto-filled) before wave 1
 };
 
 export const TARGET_MODES = ['FIRST', 'CLOSE', 'STRONG'];

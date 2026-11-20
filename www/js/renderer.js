@@ -248,6 +248,46 @@ export class Renderer {
     ctx.restore();
   }
 
+  // Ghost preview of the selected road piece: flat fills + strokes only
+  // (no gradients/shadowBlur — P-03/P-06). Cyan when canPlaceRoadPiece says
+  // the spot is valid, red otherwise.
+  drawPieceGhost(preview) {
+    if (!preview) return;
+    const { ctx, cell } = this;
+    const ok = preview.valid;
+    const fill = ok ? 'rgba(0,229,255,0.22)' : 'rgba(255,77,94,0.24)';
+    const stroke = ok ? PALETTE.cyan : PALETTE.danger;
+    ctx.save();
+    ctx.lineWidth = 2;
+    for (let i = 0; i < preview.cells.length; i++) {
+      const c = preview.cells[i];
+      if (c.col < 0 || c.row < 0 || c.col >= GRID.cols || c.row >= GRID.rows) continue;
+      const x = this.sx(c.col);
+      const y = this.sy(c.row);
+      ctx.fillStyle = fill;
+      ctx.fillRect(x + 2, y + 2, cell - 4, cell - 4);
+      ctx.strokeStyle = stroke;
+      ctx.strokeRect(x + 3, y + 3, cell - 6, cell - 6);
+      // connector tabs show where the piece would link or dangle
+      for (const d of preview.ports[i]) {
+        const dx = [0, 1, 0, -1][d];
+        const dy = [-1, 0, 1, 0][d];
+        const bx = x + cell / 2 + dx * cell * 0.42;
+        const by = y + cell / 2 + dy * cell * 0.42;
+        ctx.beginPath();
+        if (dx !== 0) {
+          ctx.moveTo(bx, by - cell * 0.18);
+          ctx.lineTo(bx, by + cell * 0.18);
+        } else {
+          ctx.moveTo(bx - cell * 0.18, by);
+          ctx.lineTo(bx + cell * 0.18, by);
+        }
+        ctx.stroke();
+      }
+    }
+    ctx.restore();
+  }
+
   _marker(cellPos, color, label) {
     const { ctx, cell } = this;
     const x = this.sx(cellPos.col);

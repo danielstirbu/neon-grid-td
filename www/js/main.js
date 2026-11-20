@@ -1,9 +1,9 @@
 // main.js — game loop (clamped dt), Pointer Events input, state machine, combat orchestration.
-import { GRID, ECONOMY, SPEED_OPTIONS, PALETTE, TOWERS, WAVES_META } from './config.js';
+import { GRID, ECONOMY, SPEED_OPTIONS, PALETTE, TOWERS, TILE_PIECES, rotatePiece, WAVES_META } from './config.js';
 import { audio } from './audio.js';
 import { Pathfinder } from './pathfinding.js';
 import { Enemy, Tower, Projectile, Beam, FloatingText, burst } from './entities.js';
-import { waveGroups, waveScale, buildSchedule } from './waves.js';
+import { waveGroups, waveScale, buildSchedule, makePieceRng, createPieceQueue } from './waves.js';
 import { Renderer } from './renderer.js';
 import { UI } from './ui.js';
 
@@ -54,10 +54,16 @@ class Game {
     this._onKey = (e) => {
       if (e.key === ' ' || e.key === 'p') this.togglePause();
       if (e.key === 'n') this.startNextWave();
-      if (e.key === 'Escape') { this.ui.clearTowerSelect(); this.ui.closeTowerMenu(); }
+      if (e.key === 'r' || e.key === 'R') this.rotateSelectedPiece();
+      if (e.key === 'Escape') {
+        this.ui.clearTowerSelect();
+        this.ui.closeTowerMenu();
+        this.clearPieceSelect();
+      }
       if (e.key >= '1' && e.key <= '4') {
         const keys = ['pulse', 'cryo', 'arc', 'rail'];
         this.ui.toggleTowerSelect(keys[+e.key - 1]);
+        if (this.ui.selectedTowerKey) this.clearPieceSelect();
       }
       this.requestRender();
     };
@@ -102,6 +108,15 @@ class Game {
     this.renderer.setNetwork(this.path);
     this._spawnCursor = 0;
     this.selectedTower = null;
+    // Tile-builder: seeded 2-piece hand + auto-wave countdown for this run.
+    this.pieceRng = makePieceRng((Math.random() * 0xffffffff) >>> 0);
+    this.roadHand = createPieceQueue(this.pieceRng);
+    this.pendingPieces = ECONOMY.firstWavePrepPieces; // auto-placed if not built in time
+    this.waveCountdown = ECONOMY.waveCountdownFirst; // 15 s prep clock
+    this.countdownArmed = true;
+    this.selectedPiece = null; // index into roadHand, or null
+    this.pieceRotation = 0;
+    this.ui.clearPieceSelect();
     this.ui.closeTowerMenuSilent();
     this.ui.clearTowerSelect();
   }
@@ -164,21 +179,102 @@ class Game {
   }
 
   // ---------- Waves ----------
-  startNextWave() {
+  startNextWave(early = false) {
     // Blocked while paused: starting a wave during a phantom pause would set
     // waveActive without step() ever running, locking the run (L-05).
     if (this.state !== 'playing' || this.waveActive || this.paused) return;
+    // Safety net: any mandatory piece still in the hand is auto-placed so the
+    // road keeps a continuous line to the core before enemies march.
+    const autoCells = this._autoPlacePending();
+    if (early && this.countdownArmed && this.waveCountdown > 0.5) {
+      this.cash += ECONOMY.earlyWaveBonus;
+      this.floaters.push(new FloatingText(
+        GRID.core.col + 0.5, GRID.core.row - 0.5, `+¤${ECONOMY.earlyWaveBonus} EARLY`, PALETTE.yellow, 0.55));
+    }
     this.wave += 1;
     const groups = waveGroups(this.wave, this.endless);
     this.schedule = buildSchedule(groups);
     this.spawnClock = 0;
     this.waveScale = waveScale(this.wave, this.endless);
     this.waveActive = true;
+    this._armNextCountdown();
+    if (autoCells.length) this.requestRender();
     const isBoss = this.wave % WAVES_META.bossEvery === 0;
     this.ui.showBanner(isBoss ? `⚠ WAVE ${this.wave} — BOSS ⚠` : `WAVE ${this.wave}`);
     audio.play(isBoss ? 'boss' : 'wave');
     this._syncMusic();
     this.ui.vibrate(isBoss ? [40, 60, 40] : 15);
+  }
+
+  // Cells holding live walkers — the auto-placer must never build under them.
+  _enemyCells() {
+    const keys = new Set();
+    for (const e of this.enemies) {
+      if (!e.dead && !e.reachedCore) keys.add(this.path.idx(Math.floor(e.x), Math.floor(e.y)));
+    }
+    return keys;
+  }
+
+  // Auto-place every pending piece in the hand; returns the cells added.
+  _autoPlacePending() {
+    const cells = [];
+    while (this.pendingPieces > 0 && this.roadHand.length > 0) {
+      const piece = TILE_PIECES[this.roadHand[0]];
+      // Never build under a live walker (L-11 mirror for auto-placement).
+      const spot = this.path.findRoadPiecePlacement(piece, this._enemyCells());
+      if (!spot) {
+        this.ui.toast('NO ROOM FOR ROAD');
+        break;
+      }
+      const res = this.path.placeRoadPiece(piece, spot.origin, spot.rotation);
+      if (!res.ok) break;
+      this.roadHand.shift();
+      this.pendingPieces -= 1;
+      cells.push(...res.cells);
+    }
+    if (cells.length) {
+      this.renderer._buildBoard();
+      this.repathAll();
+      for (const c of cells) burst(this.particles, c.col + 0.5, c.row + 0.5, PALETTE.cyan, 5, 1.6, 0.3);
+      audio.play('place');
+      this.ui.toast('ROAD AUTO-EXTENDED');
+      this.requestRender();
+    }
+    return cells;
+  }
+
+  // A wave just started: top the hand back up to 2 balanced pieces, owe one
+  // placement for the next gap, and re-arm the 12 s clock (it only ticks
+  // while no wave is active).
+  _armNextCountdown() {
+    this._refillHand();
+    this.pendingPieces = 1;
+    this.waveCountdown = ECONOMY.waveCountdown;
+    this.countdownArmed = true;
+  }
+
+  // Keep the hand at ECONOMY.pieceHandSize with an even size mix: every new
+  // draw is the opposite size of the piece that stayed in the hand.
+  _refillHand() {
+    while (this.roadHand.length < ECONOMY.pieceHandSize) {
+      const [one, two] = createPieceQueue(this.pieceRng);
+      const lastSize = this.roadHand.length
+        ? TILE_PIECES[this.roadHand[this.roadHand.length - 1]].size
+        : 2;
+      this.roadHand.push(lastSize === 1 ? one : two);
+    }
+    this.roadHand.length = ECONOMY.pieceHandSize;
+  }
+
+  // Auto-wave clock: only advances between waves while un-paused, so pause
+  // and visibilitychange freeze it for free (step() is not called).
+  updateWaveCountdown(dt) {
+    if (this.waveActive || !this.countdownArmed) return;
+    this.waveCountdown -= dt;
+    if (this.waveCountdown > 0) return;
+    this.waveCountdown = 0;
+    this.countdownArmed = false;
+    this.startNextWave(false);
   }
 
   updateWave(dt) {
@@ -411,6 +507,94 @@ class Game {
     return res;
   }
 
+  // Dock: tap a queued piece to select it; tap the already-selected card again
+  // to rotate (same as the ROTATE button / R key).
+  selectPiece(index) {
+    audio.unlock();
+    audio.play('tap');
+    this.ui.vibrate(8);
+    if (this.selectedPiece === index) {
+      this.rotateSelectedPiece();
+      return;
+    }
+    this.selectedPiece = index;
+    this.pieceRotation = 0;
+    this.ui.clearTowerSelect();
+    this.clearSelectedTower();
+    this.ui.closeTowerMenuSilent();
+    this.piecePreview = null;
+    this.ui.refreshPieceDock(this);
+    this.requestRender();
+  }
+
+  rotateSelectedPiece() {
+    if (this.selectedPiece === null) return;
+    this.pieceRotation = (this.pieceRotation + 1) % 4;
+    audio.play('tap');
+    this._updatePiecePreview();
+    this.requestRender();
+  }
+
+  clearPieceSelect() {
+    this.selectedPiece = null;
+    this.pieceRotation = 0;
+    this.piecePreview = null;
+    this.ui.refreshPieceDock(this);
+  }
+
+  // Recompute the ghost preview under the cursor for the selected piece.
+  _updatePiecePreview() {
+    if (this.selectedPiece === null || !this.hoverCell) {
+      this.piecePreview = null;
+      return;
+    }
+    this._makePreview(this.hoverCell.col, this.hoverCell.row);
+  }
+
+  _makePreview(col, row) {
+    const piece = this.selectedPiece === null ? null : TILE_PIECES[this.roadHand[this.selectedPiece]];
+    if (!piece) {
+      this.piecePreview = null;
+      return;
+    }
+    const check = this.path.canPlaceRoadPiece(piece, { col, row }, this.pieceRotation);
+    const shape = rotatePiece(piece, this.pieceRotation);
+    this.piecePreview = {
+      origin: { col, row },
+      valid: check.ok,
+      cells: shape.cells.map((c) => ({ col: col + c.col, row: row + c.row })),
+      ports: shape.ports,
+    };
+  }
+
+  tryPlaceSelectedPiece(col, row) {
+    if (this.selectedPiece === null) return false;
+    const piece = TILE_PIECES[this.roadHand[this.selectedPiece]];
+    if (!piece) return false;
+    // L-11 mirror for roads: never pave over a walking enemy.
+    const keys = this._enemyCells();
+    const check = this.path.canPlaceRoadPiece(piece, { col, row }, this.pieceRotation);
+    if (check.ok && check.cells.some((c) => keys.has(this.path.idx(c.col, c.row)))) {
+      audio.play('deny');
+      this.ui.toast('ENEMY IN CELL');
+      this.ui.vibrate(30);
+      return false;
+    }
+    const res = this.placeRoadPiece(piece, { col, row }, this.pieceRotation);
+    if (!res.ok) return false;
+    this._consumeHandPiece(this.selectedPiece);
+    this.clearPieceSelect();
+    return true;
+  }
+
+  // A hand piece built by the player leaves the queue; top the hand back up to
+  // a balanced 2-piece hand and credit the pending-placement debt.
+  _consumeHandPiece(index) {
+    this.roadHand.splice(index, 1);
+    this._refillHand();
+    if (this.pendingPieces > 0) this.pendingPieces -= 1;
+  }
+
   upgradeSelected() {
     const t = this.ui.menuTower;
     if (!t || !t.canUpgrade || !this.towers.includes(t)) return;
@@ -472,10 +656,12 @@ class Game {
       const g = this.renderer.toGrid(e.clientX - rect.left, e.clientY - rect.top);
       const col = Math.floor(g.x);
       const row = Math.floor(g.y);
-      this.hover = this.ui.selectedTowerKey &&
-        col >= 0 && row >= 0 && col < GRID.cols && row < GRID.rows
+      const inGrid = col >= 0 && row >= 0 && col < GRID.cols && row < GRID.rows;
+      this.hoverCell = inGrid ? { col, row } : null;
+      this.hover = this.ui.selectedTowerKey && inGrid
         ? { col, row, valid: this.path.canPlace(col, row) && this.cash >= TOWERS[this.ui.selectedTowerKey].cost }
         : null;
+      if (this.selectedPiece !== null) this._updatePiecePreview();
       if (this.paused) this.requestRender();
     };
     this._onPointerUp = (e) => {
@@ -509,6 +695,10 @@ class Game {
   }
 
   handleTap(col, row) {
+    if (this.selectedPiece !== null) {
+      this.tryPlaceSelectedPiece(col, row);
+      return;
+    }
     const existing = this.towerAt(col, row);
     if (this.ui.selectedTowerKey) {
       if (!existing) {
@@ -630,6 +820,8 @@ class Game {
 
   step(dt) {
     const now = performance.now() / 1000;
+    this.updateWaveCountdown(dt);
+    if (this.state !== 'playing') return; // countdown expiry can't start a wave while over/menu
     this.updateWave(dt);
     for (const t of this.towers) this.fireTower(t, dt, now);
     for (const e of this.enemies) e.update(dt, now);
@@ -677,6 +869,7 @@ class Game {
         TOWERS[this.ui.selectedTowerKey].color);
     }
     if (this.selectedTower) r.drawSelected(this.selectedTower);
+    if (this.piecePreview) r.drawPieceGhost(this.piecePreview);
     for (const t of this.towers) r.drawTower(t);
     for (const b of this.beams) r.drawBeam(b);
     // P-10: viewport culling. Cheap bounds check in grid coordinates before the

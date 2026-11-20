@@ -192,6 +192,56 @@ body {
 .tower-card.unaffordable { opacity: 0.42; }
 .tower-card:active { transform: scale(0.96); }
 
+/* ---------- Piece queue row ---------- */
+#piece-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  align-items: stretch;
+  gap: 8px;
+}
+
+#piece-cards {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  min-width: 0;
+}
+
+.piece-card {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: rgba(6, 20, 14, 0.75);
+  color: var(--text);
+  padding: 5px 4px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  font-size: 10px;
+  cursor: pointer;
+  min-height: 52px;
+}
+.piece-card .glyph { font-size: 16px; line-height: 1; color: var(--cyan); }
+.piece-card .rot-hint { color: var(--dim); font-size: 9px; }
+.piece-card.selected { border-color: var(--cyan); box-shadow: 0 0 12px rgba(0, 229, 255, 0.45); }
+.piece-card.disabled { opacity: 0.35; cursor: default; }
+.piece-card:active { transform: scale(0.96); }
+
+#btn-rotate {
+  align-self: stretch;
+  font-size: 11px;
+  letter-spacing: 0.5px;
+  padding: 6px 10px;
+  min-width: 74px;
+}
+#btn-rotate:disabled { opacity: 0.4; cursor: default; }
+
+#piece-row #btn-next-wave {
+  font-size: 12px;
+  padding: 8px 10px;
+  white-space: nowrap;
+}
+
 /* ---------- Buttons ---------- */
 .primary-btn {
   border: 1px solid var(--cyan);

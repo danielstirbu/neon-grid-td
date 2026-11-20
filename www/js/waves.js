@@ -1,5 +1,6 @@
-// waves.js — 20-wave campaign generator, boss every 5 waves, endless scaling past 20.
-import { WAVES_META } from './config.js';
+// waves.js — 20-wave campaign generator, boss every 5 waves, endless scaling past 20,
+// + the tile-builder piece queue (seeded, size-balanced).
+import { TILE_PIECES, WAVES_META } from './config.js';
 
 // A wave is a list of groups: { type, count, gap (s between spawns), delay (s until group starts) }.
 function campaignWave(n) {
@@ -101,4 +102,31 @@ export function buildSchedule(groups) {
   }
   events.sort((a, b) => a.at - b.at);
   return { events, duration: end + 2 };
+}
+
+// ---------- Tile-builder piece queue ----------
+
+// mulberry32: small deterministic PRNG so a run's queue is reproducible from
+// its seed (testable in Node without Math.random).
+export function makePieceRng(seed) {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+// Balanced hand of TILE_PIECES keys: [one 1-cell piece, one 2-cell piece] —
+// the rng only decides which concrete piece comes out of each bucket, so the
+// queue is always an even mix and road growth keeps pace with the wave clock.
+// Deterministic for a seeded rng.
+const PIECE_KEYS = Object.keys(TILE_PIECES);
+const SIZE1_KEYS = PIECE_KEYS.filter((k) => TILE_PIECES[k].size === 1);
+const SIZE2_KEYS = PIECE_KEYS.filter((k) => TILE_PIECES[k].size === 2);
+
+export function createPieceQueue(rng) {
+  const pick = (bucket) => bucket[Math.floor(rng() * bucket.length)];
+  return [pick(SIZE1_KEYS), pick(SIZE2_KEYS)];
 }

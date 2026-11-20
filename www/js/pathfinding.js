@@ -157,6 +157,34 @@ export class Pathfinder {
     return { ok: true, cells: check.cells, openEnds: this.openEnds() };
   }
 
+  // Pure helper for auto-placement: anchor every rotation so one of the
+  // piece's ports faces each open end (the piece sits beside it, never on it),
+  // and return the first legal {origin, rotation}. `occupiedKeys` (Set of idx)
+  // lets callers exclude cells holding live enemies. Returns null if none fit.
+  findRoadPiecePlacement(piece, occupiedKeys = null) {
+    for (let rot = 0; rot < 4; rot++) {
+      const placed = rotatePiece(piece, rot);
+      for (const end of this.openEnds()) {
+        for (let i = 0; i < placed.cells.length; i++) {
+          const cell = placed.cells[i];
+          for (const d of placed.ports[i]) {
+            const origin = {
+              col: end.col - cell.col - DIRS[d].dx,
+              row: end.row - cell.row - DIRS[d].dy,
+            };
+            const check = this.canPlaceRoadPiece(piece, origin, rot);
+            if (!check.ok) continue;
+            if (occupiedKeys && check.cells.some((c) => occupiedKeys.has(this.idx(c.col, c.row)))) {
+              continue;
+            }
+            return { origin, rotation: rot, cells: check.cells };
+          }
+        }
+      }
+    }
+    return null;
+  }
+
   // BFS distance field seeded from the core, walking only reciprocal-port
   // edges between road cells.
   recompute() {

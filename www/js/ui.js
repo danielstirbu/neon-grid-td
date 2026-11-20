@@ -1,5 +1,5 @@
-// ui.js — HUD bindings, tower dock, contextual menu, toasts, haptics.
-import { TOWERS, TOWER_ORDER, ECONOMY } from './config.js';
+// ui.js — HUD bindings, tower dock, road-piece dock + rotate, contextual menu, toasts, haptics.
+import { TOWERS, TOWER_ORDER, ECONOMY, TILE_PIECES } from './config.js';
 import { audio } from './audio.js';
 
 const $ = (id) => document.getElementById(id);
@@ -17,6 +17,7 @@ export class UI {
       coreStat: $('stat-core'),
       btnPause: $('btn-pause'), btnSpeed: $('btn-speed'), btnSound: $('btn-sound'),
       dock: $('tower-dock'), nextWave: $('btn-next-wave'),
+      pieceCards: $('piece-cards'), btnRotate: $('btn-rotate'),
       menu: $('tower-menu'), tmTitle: $('tm-title'), tmStats: $('tm-stats'),
       tmUpgrade: $('tm-upgrade'), tmUpCost: $('tm-up-cost'), tmSell: $('tm-sell'),
       tmSellVal: $('tm-sell-val'), tmTarget: $('tm-target'), tmClose: $('tm-close'),
@@ -30,6 +31,7 @@ export class UI {
     this.selectedTowerKey = null;
     this.toastTimer = 0;
     this._buildDock();
+    this._buildPieceDock();
     this._bind();
   }
 
@@ -67,12 +69,64 @@ export class UI {
     }
   }
 
+  _buildPieceDock() {
+    // Two queued-piece cards + a rotate button; built once, refreshed on change.
+    this.pieceCards = [];
+    for (let i = 0; i < ECONOMY.pieceHandSize; i++) {
+      const card = document.createElement('button');
+      card.className = 'piece-card';
+      const glyph = document.createElement('span');
+      glyph.className = 'glyph';
+      const label = document.createElement('span');
+      const rot = document.createElement('span');
+      rot.className = 'rot-hint';
+      card.append(glyph, label, rot);
+      card.addEventListener('pointerdown', (e) => {
+        e.stopPropagation();
+        this.game.selectPiece(i);
+      });
+      this.els.pieceCards.appendChild(card);
+      this.pieceCards.push({ card, glyph, label, rot, key: null });
+    }
+  }
+
+  refreshPieceDock(game) {
+    for (let i = 0; i < this.pieceCards.length; i++) {
+      const entry = this.pieceCards[i];
+      const key = game.roadHand ? game.roadHand[i] : null;
+      const piece = key ? TILE_PIECES[key] : null;
+      if (entry.key !== key) {
+        entry.key = key;
+        entry.glyph.textContent = piece ? piece.glyph : '·';
+        entry.label.textContent = piece ? piece.name.toUpperCase() : 'EMPTY';
+      }
+      const selected = game.selectedPiece === i;
+      entry.card.classList.toggle('selected', selected);
+      entry.card.classList.toggle('disabled', !piece);
+      const rotTxt = selected ? `↻ ${game.pieceRotation}×90°` : (piece ? `${piece.size} CEL` : '');
+      if (entry.rot.textContent !== rotTxt) entry.rot.textContent = rotTxt;
+    }
+    if (this.els.btnRotate) {
+      this.els.btnRotate.disabled = game.selectedPiece === null;
+    }
+  }
+
+  clearPieceSelect() {
+    if (this.game) this.game.selectedPiece = null;
+    for (const entry of this.pieceCards) entry.card.classList.remove('selected');
+  }
+
   _bind() {
     const { els } = this;
     els.nextWave.addEventListener('pointerdown', (e) => {
       e.stopPropagation();
       audio.unlock();
-      this.game.startNextWave();
+      this.game.startNextWave(true); // early start → small cash bonus
+    });
+    els.btnRotate?.addEventListener('pointerdown', (e) => {
+      e.stopPropagation();
+      audio.unlock();
+      this.game.rotateSelectedPiece();
     });
     els.btnPause.addEventListener('pointerdown', (e) => {
       e.stopPropagation();
@@ -137,7 +191,10 @@ export class UI {
     for (const [k, card] of Object.entries(this.dockCards)) {
       card.classList.toggle('selected', k === this.selectedTowerKey);
     }
-    if (this.selectedTowerKey) this.game.clearSelectedTower();
+    if (this.selectedTowerKey) {
+      this.game.clearSelectedTower();
+      this.game.clearPieceSelect();
+    }
     this.game.requestRender();
   }
 
@@ -181,11 +238,15 @@ export class UI {
   updateHUD(game) {
     // P-05: write the DOM only when something actually changed (was 60 Hz).
     const { els } = this;
+    const cd = game.waveCountdown !== undefined && !game.waveActive ? Math.ceil(game.waveCountdown) : -1;
+    const hand = game.roadHand ? game.roadHand.join(',') : '';
     const sig = `${game.wave}|${game.cash}|${game.core}|${game.endless}|${game.waveActive}|` +
-      `${game.state}|${game.paused}|${game.speedIndex}|${audio.enabled}|${game.totalWaves}` +
+      `${game.state}|${game.paused}|${game.speedIndex}|${audio.enabled}|${game.totalWaves}|${cd}|${hand}` +
+      `|${game.selectedPiece}|${game.pieceRotation}` +
       (this.menuTower ? `|${this.menuTower.level}${this.menuTower.targetMode}` : '');
     if (sig === this._hudSig) return;
     this._hudSig = sig;
+    this.refreshPieceDock(game);
 
     const waveTxt = game.endless ? `∞ ${game.wave}` : `${game.wave}/${game.totalWaves}`;
     if (waveTxt !== this._waveTxt) { els.wave.textContent = waveTxt; this._waveTxt = waveTxt; }
@@ -203,8 +264,14 @@ export class UI {
     }
     const disabled = game.waveActive || game.state !== 'playing';
     if (this._nextDisabled !== disabled) { els.nextWave.disabled = disabled; this._nextDisabled = disabled; }
-    const nextTxt = game.wave === 0 ? 'START WAVE ▸' :
-      (game.wave >= game.totalWaves && !game.endless ? 'FINAL ▸' : `WAVE ${game.wave + 1} ▸`);
+    let nextTxt;
+    if (game.wave === 0) nextTxt = 'START WAVE ▸';
+    else if (game.wave >= game.totalWaves && !game.endless) nextTxt = 'FINAL ▸';
+    else nextTxt = `WAVE ${game.wave + 1} ▸`;
+    // Countdown label: the auto-wave clock is armed between waves.
+    if (!disabled && game.countdownArmed) {
+      nextTxt = `NEXT WAVE IN ${Math.max(1, Math.ceil(game.waveCountdown))}s ▸`;
+    }
     if (nextTxt !== this._nextTxt) { els.nextWave.textContent = nextTxt; this._nextTxt = nextTxt; }
     const pauseTxt = game.paused ? '▶' : '❚❚';
     if (pauseTxt !== this._pauseTxt) { els.btnPause.textContent = pauseTxt; this._pauseTxt = pauseTxt; }

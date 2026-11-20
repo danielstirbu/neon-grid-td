@@ -7,15 +7,15 @@ Toate modulele sunt ES native (`<script type="module">`), fără bundler. Graful
 | Fișier | Responsabilitate unică | API cheie | Depinde de |
 |---|---|---|---|
 | `www/js/config.js` | Constante de balans + date tile-builder (piese de drum, porturi, rotații) | `GRID`, `CORE_CELL`, `DIRS`, `rotDir()`, `opposite()`, `INITIAL_ROAD`, `TILE_PIECES`, `rotatePiece()`, `PALETTE`, `ECONOMY`, `TOWERS`, `TOWER_ORDER`, `ENEMIES`, `WAVES_META`, `TARGET_MODES`, `SPEED_OPTIONS`, `towerLevelStats()`, `towerInvested()` | — |
-| `www/js/pathfinding.js` | Rețeaua de drum (celule cu porturi) + flow-field BFS spre CORE + validări de plasare (turn și piese de drum) | `Pathfinder`: `recompute()`, `canPlace()`, `place()/remove()`, `isRoad()`, `isCore()`, `hasPort()`, `openEnds()`, `spawnCells()`, `canPlaceRoadPiece()`, `placeRoadPiece()`, `isReachableFromCore()`, `distAt()`, `nextStep()` | `config` (CORE_CELL, DIRS, INITIAL_ROAD, rotatePiece) |
+| `www/js/pathfinding.js` | Rețeaua de drum (celule cu porturi) + flow-field BFS spre CORE + validări de plasare (turn și piese de drum) | `Pathfinder`: `recompute()`, `canPlace()`, `place()/remove()`, `isRoad()`, `isCore()`, `hasPort()`, `openEnds()`, `spawnCells()`, `canPlaceRoadPiece()`, `placeRoadPiece()`, `findRoadPiecePlacement()`, `isReachableFromCore()`, `distAt()`, `nextStep()` | `config` (CORE_CELL, DIRS, INITIAL_ROAD, rotatePiece) |
 | `www/js/entities.js` | Stare și comportament pe entitate (fără canvas, fără DOM) | `Enemy`, `Tower`, `Projectile`, `Beam`, `Particle`, `FloatingText`, `burst()` (plafon `MAX_PARTICLES`) | `config` |
-| `www/js/waves.js` | Generare de valuri (campanie 20 + boss + endless) | `waveGroups()`, `waveScale()`, `buildSchedule()` | `config.WAVES_META` |
+| `www/js/waves.js` | Generare de valuri (campanie 20 + boss + endless) + coada de piese tile-builder (seeded, echilibrată 1+2 celule) | `waveGroups()`, `waveScale()`, `buildSchedule()`, `makePieceRng()`, `createPieceQueue()` | `config` (WAVES_META, TILE_PIECES) |
 | `www/js/audio.js` | Sinteză procedurală Web Audio: 16 SFX + BGM pe 3 mode | singleton `audio`: `unlock()`, `play(name)`, `setEnabled()`, `setMusicMode(mode)` | — |
 | `www/js/toon.js` | Artă procedurală (personaje, turnuri, text), cache de gradiente | `drawToonEnemy()`, `drawToonTower()`, `toonText()`, `clearGradCache()`, helpers `rr/roundPoly/bodyPath/eyes/lighten/darken` | `config.PALETTE` |
 | `www/js/landscape.js` | Fundal procedural pre-randat o singură dată pe resize | `Landscape.build(w,h,dpr,avoid)`, `.layer` (canvas offscreen) | — |
 | `www/js/renderer.js` | Punerea entităților pe canvas; board offscreen (drum + porturi randate din network); sprite-uri de glow | `Renderer`: `setNetwork()`, `resize()`, `_buildBoard()`, `toGrid()`, `sx()/sy()`, `begin()`, `drawGrid/Tower/Enemy/Projectile/Beam/Particle/FloatingText/Range/Selected` | `config`, `toon`, `landscape` |
 | `www/js/ui.js` | HUD, dock de turnuri, meniu contextual, toast/banner, vibrații | `UI`: `updateHUD()` (dirty-check), `toggleTowerSelect()`, `openTowerMenu()/refreshTowerMenu()/closeTowerMenu()`, `showStart/Over/PauseOverlay()`, `toast()`, `vibrate()` | `config`, `audio` |
-| `www/js/main.js` | Orchestrare: buclă, state machine, input, combat, economie | `Game`: `begin()`, `retry()`, `toMenu()`, `togglePause/Speed/Sound()`, `startNextWave()`, `tryPlaceTower()`, `placeRoadPiece()`, `repath()/repathAll()`, `fireTower()`, `frame()/step()/render()`, `destroy()` | toate de mai sus |
+| `www/js/main.js` | Orchestrare: buclă, state machine, input, combat, economie, mâna de piese + countdown-ul automat de val | `Game`: `begin()`, `retry()`, `toMenu()`, `togglePause/Speed/Sound()`, `startNextWave()`, `tryPlaceTower()`, `placeRoadPiece()`, `selectPiece()`, `rotateSelectedPiece()`, `updateWaveCountdown()`, `repath()/repathAll()`, `fireTower()`, `frame()/step()/render()`, `destroy()` | toate de mai sus |
 | `www/js/boot.js` | Înregistrarea service worker-ului (fișier separat cere CSP `script-src 'self'`) | — | — |
 | `www/sw.js` | Cache-first, offline complet; navigare network-first cu fallback | `CACHE` (versiune), `PRECACHE` | — |
 
@@ -30,7 +30,7 @@ requestAnimationFrame ──► frame(now)
    └─ altfel (menu / paused / over) ─► idle; o singură repaint la requestRender()
 ```
 
-`step(dt)` în ordine: `updateWave` (spawn din `schedule`) → `fireTower` per turn → `Enemy.update` → `Projectile.update` → `Beam.update` → colectare kills/leaks (cash, `FloatingText`, `burst`, `audio.play`, `core`) → filtrare liste moarte → `Particle`/`FloatingText`.
+`step(dt)` în ordine: `updateWaveCountdown` (ceasul automat dintre valuri: `15 s` înainte de valul 1, `12 s` între valuri, armat doar între valuri ⇒ `paused` / `visibilitychange` îl îngheață gratuit; la expirare `startNextWave()` își auto-plasează piesele restante cu `findRoadPiecePlacement()`) → `updateWave` (spawn din `schedule`) → `fireTower` per turn → `Enemy.update` → `Projectile.update` → `Beam.update` → colectare kills/leaks (cash, `FloatingText`, `burst`, `audio.play`, `core`) → filtrare liste moarte → `Particle`/`FloatingText`.
 
 `render()` în ordine: `begin()` (landscape + fundal) → `drawGrid` (board pre-randat + hover) → `drawRange` → `drawSelected` → turnuri → beams → inamici (**cu viewport culling**, P-10) → proiectile → particule → floating text.
 
